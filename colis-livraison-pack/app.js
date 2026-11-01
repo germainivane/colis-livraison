@@ -1,18 +1,13 @@
-const seedDeliveries = [
-  { id: 'CL-2048', recipient: 'Mariam Koné', phone: '+225 07 08 14 22 10', pickup: 'Cocody · Riviera 3', dropoff: 'Plateau · Avenue Noguès', courier: 'K. Kouassi', status: 'En cours', parcel: 'Petit colis', time: '09:42' },
-  { id: 'CL-2047', recipient: 'Jean-Marc Yao', phone: '+225 05 66 21 08 34', pickup: 'Marcory · Zone 4', dropoff: 'Treichville · Avenue 16', courier: 'M. Traoré', status: 'À récupérer', parcel: 'Document', time: '09:28' },
-  { id: 'CL-2046', recipient: 'Awa Diabaté', phone: '+225 01 02 67 39 11', pickup: 'Yopougon · Siporex', dropoff: 'Cocody · Angré 8e tranche', courier: 'A. Diallo', status: 'Livrée', parcel: 'Colis standard', time: '09:10' },
-  { id: 'CL-2045', recipient: 'Serge N’Guessan', phone: '+225 07 71 04 96 22', pickup: 'Adjamé · Liberté', dropoff: 'Cocody · Deux-Plateaux', courier: 'À attribuer', status: 'À attribuer', parcel: 'Petit colis', time: '08:55' }
-];
-const seedCouriers = [
-  { name: 'K. Kouassi', fullName: 'Kouassi Kouamé', phone: '+225 07 44 28 10 03', status: 'En livraison', active: true },
-  { name: 'M. Traoré', fullName: 'Mamadou Traoré', phone: '+225 05 55 09 62 81', status: 'Disponible', active: true },
-  { name: 'A. Diallo', fullName: 'Aminata Diallo', phone: '+225 01 63 22 07 51', status: 'Disponible', active: true },
-  { name: 'S. Bamba', fullName: 'Souleymane Bamba', phone: '+225 07 87 12 00 42', status: 'Hors ligne', active: false }
-];
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.118.0';
+
+const config = window.COLIS_SUPABASE || {};
+const supabaseReady = Boolean(config.url && config.publishableKey && !config.publishableKey.includes('COLLER_LA_CLE'));
+const supabase = supabaseReady ? createClient(config.url, config.publishableKey) : null;
 const $ = (selector) => document.querySelector(selector);
-let orders = JSON.parse(localStorage.getItem('colis-orders') || 'null') || seedDeliveries;
-let couriers = JSON.parse(localStorage.getItem('colis-couriers') || 'null') || seedCouriers;
+let deliveries = [];
+let couriers = [];
+let user = null;
+let profile = null;
 let role = 'admin';
 let view = 'login';
 let loginRole = 'admin';
@@ -20,157 +15,366 @@ let adminPage = 'overview';
 let courierPage = 'missions';
 let filter = 'Tous';
 let searchTerm = '';
-const currentCourier = 'K. Kouassi';
+let accountModal = null;
+let needsPasswordSetup = window.location.hash.includes('type=invite') || window.location.hash.includes('type=recovery');
 
 const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+const initials = (name = '') => name === 'À attribuer' ? '?' : name.split(/[ .]+/).filter(Boolean).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
 const statusClass = (status) => status === 'En cours' ? 'progress' : ['À récupérer', 'À attribuer'].includes(status) ? 'waiting' : status === 'Livrée' ? 'done' : '';
-const initials = (name) => name === 'À attribuer' ? '?' : name.split(/[ .]+/).filter(Boolean).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
-function save() { localStorage.setItem('colis-orders', JSON.stringify(orders)); localStorage.setItem('colis-couriers', JSON.stringify(couriers)); }
-function toast(message) { const el = $('#toast'); el.textContent = message; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2600); }
-function metrics() { return { total: orders.length, pending: orders.filter((o) => ['À attribuer', 'À récupérer'].includes(o.status)).length, progress: orders.filter((o) => o.status === 'En cours').length, done: orders.filter((o) => o.status === 'Livrée').length }; }
-function navItems() { return role === 'admin' ? [['overview', '▦', 'Vue d’ensemble'], ['deliveries', '◉', 'Livraisons'], ['team', '♙', 'Livreurs']] : [['missions', '▣', 'Mes missions'], ['history', '◷', 'Historique']]; }
-function setRole(nextRole) {
-  view = 'dashboard';
-  role = nextRole;
-  document.body.classList.remove('auth-mode');
-  window.location.hash = role === 'admin' ? 'administration' : 'livreur';
-  document.querySelectorAll('[data-role]').forEach((button) => button.classList.toggle('active', button.dataset.role === role));
-  $('#roleLabel').textContent = role === 'admin' ? 'Espace Administrateur' : 'Espace Livreur';
-  $('#crumbLabel').textContent = role === 'admin' ? ({ overview: 'Vue d’ensemble', deliveries: 'Livraisons', team: 'Livreurs' }[adminPage]) : (courierPage === 'history' ? 'Historique' : 'Mes missions');
-  $('#profileName').innerHTML = role === 'admin' ? 'Aïcha Mensah<br><span style="color:#8b958e;font-size:11px;font-weight:400">Administratrice · Atelier Colis</span>' : 'Kouassi Kouamé<br><span style="color:#8b958e;font-size:11px;font-weight:400">Livreur partenaire</span>';
-  const activePage = role === 'admin' ? adminPage : courierPage;
-  $('#sideNav').innerHTML = navItems().map(([key, icon, label]) => `<button class="${activePage === key ? 'active' : ''}" data-page="${key}"><span class="icon">${icon}</span>${label}</button>`).join('');
+const formatTime = (value) => new Intl.DateTimeFormat('fr-FR', { hour: '2-digit', minute: '2-digit' }).format(new Date(value));
+
+function toast(message) {
+  const el = $('#toast');
+  el.textContent = message;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 3200);
+}
+
+function showError(error, fallback = 'Une erreur est survenue. Réessaie.') {
+  console.error(error);
+  toast(error?.message || fallback);
+}
+
+function navItems() {
+  if (role === 'owner') return [['companies', '▦', 'Sociétés']];
+  return role === 'admin'
+    ? [['overview', '▦', 'Vue d’ensemble'], ['deliveries', '◉', 'Livraisons'], ['team', '♙', 'Livreurs']]
+    : [['missions', '▣', 'Mes missions'], ['history', '◷', 'Historique']];
+}
+
+function setPage(page) {
+  if (role === 'admin') adminPage = page;
+  if (role === 'courier') courierPage = page;
   render();
 }
-function setPage(page) {
-  if (role === 'admin') adminPage = page; else courierPage = page;
-  setRole(role);
-}
-function showLogin(forRole = role) {
-  loginRole = forRole;
+
+function showLogin(forRole = 'admin') {
+  role = 'admin';
   view = 'login';
+  loginRole = forRole === 'courier' ? 'courier' : 'admin';
   window.location.hash = loginRole === 'admin' ? 'connexion-administrateur' : 'connexion-livreur';
   render();
 }
+
+function metrics() {
+  return {
+    total: deliveries.length,
+    pending: deliveries.filter((item) => ['À attribuer', 'À récupérer'].includes(item.status)).length,
+    progress: deliveries.filter((item) => item.status === 'En cours').length,
+    done: deliveries.filter((item) => item.status === 'Livrée').length,
+  };
+}
+
 function heading(eyebrow, title, subtitle, action = '') {
   return `<div class="heading"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p class="subtitle">${subtitle}</p></div>${action}</div>`;
 }
-function orderRow(order, showActions = false) {
-  const courierCell = showActions && role === 'admin' && order.status !== 'Livrée'
-    ? `<select class="assign-select" data-assign="${order.id}" aria-label="Attribuer un livreur"><option value="À attribuer" ${order.courier === 'À attribuer' ? 'selected' : ''}>À attribuer</option>${couriers.filter((c) => c.active).map((c) => `<option value="${escapeHtml(c.name)}" ${order.courier === c.name ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('')}</select>`
-    : `<div class="courier"><div class="avatar">${initials(order.courier)}</div><div class="courier-name">${escapeHtml(order.courier)}</div></div>`;
-  return `<tr><td><div class="order-id">${escapeHtml(order.id)}</div><div class="route">${escapeHtml(order.time)} · ${escapeHtml(order.parcel)}</div></td><td><div style="font-weight:600">${escapeHtml(order.recipient)}</div><div class="route">${escapeHtml(order.phone)}</div></td><td><div>${escapeHtml(order.pickup)}</div><div class="route">→ ${escapeHtml(order.dropoff)}</div></td><td>${courierCell}</td><td><span class="status ${statusClass(order.status)}">${escapeHtml(order.status)}</span></td></tr>`;
+
+function metricCard(label, value, note, icon) {
+  return `<div class="metric"><div class="metric-top">${label}<span class="metric-icon">${icon}</span></div><div class="metric-value">${value}</div><div class="metric-note">${note}</div></div>`;
 }
-function tablePanel(rows, { controls = true, actions = false } = {}) {
-  return `<section class="panel"><div class="panel-head"><div><h2>${role === 'admin' ? 'Suivi des livraisons' : 'Détail des missions'}</h2><div class="route" style="margin-top:5px">${role === 'admin' ? 'Retrouvez et suivez les commandes de votre société' : 'Adresse, destinataire et progression de vos courses'}</div></div>${role === 'admin' ? '<button class="button secondary small" id="exportOrders">↓　Exporter</button>' : ''}</div>${controls ? `<div class="table-tools"><label class="search"><input id="orderSearch" placeholder="N° commande, nom, adresse…" value="${escapeHtml(searchTerm)}"></label><div class="filters">${['Tous', 'À attribuer', 'À récupérer', 'En cours', 'Livrée'].map((item) => `<button class="filter ${filter === item ? 'active' : ''}" data-filter="${item}">${item}</button>`).join('')}</div></div>` : ''}<div class="table-wrap"><table><thead><tr><th>Commande</th><th>Destinataire</th><th>Itinéraire</th><th>Livreur</th><th>Statut</th></tr></thead><tbody>${rows.length ? rows.map((order) => orderRow(order, actions)).join('') : '<tr><td colspan="5" class="empty">Aucune livraison à afficher.</td></tr>'}</tbody></table></div></section>`;
-}
-function activityPanel() {
-  const recent = [...orders].slice(0, 3);
-  return `<section class="panel"><div class="panel-head"><div><h2>Équipe de livraison</h2><div class="route" style="margin-top:5px">${couriers.filter((c) => c.active).length} livreurs actifs aujourd’hui</div></div><button class="link-button" data-goto="team">Voir l’équipe　→</button></div><div class="activity">${couriers.filter((c) => c.active).slice(0, 3).map((courier) => `<div class="activity-item"><div class="avatar">${initials(courier.name)}</div><div class="activity-text"><b>${escapeHtml(courier.fullName)}</b><br>${escapeHtml(courier.status)}<div class="activity-time">${orders.filter((o) => o.courier === courier.name && ['En cours', 'À récupérer'].includes(o.status)).length} mission(s) en cours</div></div></div>`).join('')}</div><div class="capacity"><div class="capacity-row"><b>Activité récente</b><span>${recent.length} dernières commandes</span></div>${recent.map((o) => `<div class="activity-time" style="margin-top:8px"><b>${escapeHtml(o.id)}</b> · ${escapeHtml(o.recipient)} · ${escapeHtml(o.status)}</div>`).join('')}</div></section>`;
-}
-function metricCard(label, value, note, icon) { return `<div class="metric"><div class="metric-top">${label}<span class="metric-icon">${icon}</span></div><div class="metric-value">${value}</div><div class="metric-note">${note}</div></div>`; }
-function filteredOrders(source = orders) {
+
+function currentCourierId() { return user?.id; }
+
+function filteredDeliveries(source = deliveries) {
   const query = searchTerm.trim().toLowerCase();
-  return source.filter((order) => (filter === 'Tous' || order.status === filter) && (!query || [order.id, order.recipient, order.phone, order.pickup, order.dropoff, order.courier].some((value) => value.toLowerCase().includes(query))));
+  return source.filter((item) => (filter === 'Tous' || item.status === filter) && (!query || [item.reference, item.recipient_name, item.recipient_phone, item.pickup_address, item.dropoff_address, item.courier_name].some((value) => String(value || '').toLowerCase().includes(query))));
 }
+
+function deliveryRow(item, canAssign = false) {
+  const courierCell = canAssign && item.status !== 'Livrée'
+    ? `<select class="assign-select" data-assign="${item.id}" aria-label="Attribuer un livreur"><option value="">À attribuer</option>${couriers.filter((courier) => courier.active).map((courier) => `<option value="${courier.user_id}" ${item.courier_id === courier.user_id ? 'selected' : ''}>${escapeHtml(courier.full_name)}</option>`).join('')}</select>`
+    : `<div class="courier"><div class="avatar">${initials(item.courier_name || 'À attribuer')}</div><div class="courier-name">${escapeHtml(item.courier_name || 'À attribuer')}</div></div>`;
+  return `<tr><td><div class="order-id">${escapeHtml(item.reference)}</div><div class="route">${formatTime(item.created_at)} · ${escapeHtml(item.parcel_type)}</div></td><td><div style="font-weight:600">${escapeHtml(item.recipient_name)}</div><div class="route">${escapeHtml(item.recipient_phone)}</div></td><td><div>${escapeHtml(item.pickup_address)}</div><div class="route">→ ${escapeHtml(item.dropoff_address)}</div></td><td>${courierCell}</td><td><span class="status ${statusClass(item.status)}">${escapeHtml(item.status)}</span></td></tr>`;
+}
+
+function tablePanel(rows, { controls = true, assign = false } = {}) {
+  return `<section class="panel"><div class="panel-head"><div><h2>${role === 'admin' ? 'Suivi des livraisons' : 'Détail des missions'}</h2><div class="route" style="margin-top:5px">${role === 'admin' ? 'Retrouvez les commandes de votre société' : 'Adresse, destinataire et progression de vos courses'}</div></div>${role === 'admin' ? '<button class="button secondary small" id="exportOrders">↓　Exporter</button>' : ''}</div>${controls ? `<div class="table-tools"><label class="search"><input id="orderSearch" placeholder="N° commande, nom, adresse…" value="${escapeHtml(searchTerm)}"></label><div class="filters">${['Tous', 'À attribuer', 'À récupérer', 'En cours', 'Livrée'].map((item) => `<button class="filter ${filter === item ? 'active' : ''}" data-filter="${item}">${item}</button>`).join('')}</div></div>` : ''}<div class="table-wrap"><table><thead><tr><th>Commande</th><th>Destinataire</th><th>Itinéraire</th><th>Livreur</th><th>Statut</th></tr></thead><tbody>${rows.length ? rows.map((item) => deliveryRow(item, assign)).join('') : '<tr><td colspan="5" class="empty">Aucune livraison à afficher.</td></tr>'}</tbody></table></div></section>`;
+}
+
+function activityPanel() {
+  const active = couriers.filter((item) => item.active);
+  return `<section class="panel"><div class="panel-head"><div><h2>Équipe de livraison</h2><div class="route" style="margin-top:5px">${active.length} livreur(s) actif(s)</div></div><button class="link-button" data-goto="team">Voir l’équipe　→</button></div><div class="activity">${active.slice(0, 4).map((item) => `<div class="activity-item"><div class="avatar">${initials(item.full_name)}</div><div class="activity-text"><b>${escapeHtml(item.full_name)}</b><br>${escapeHtml(item.phone || 'Téléphone non renseigné')}<div class="activity-time">${deliveries.filter((delivery) => delivery.courier_id === item.user_id && ['En cours', 'À récupérer'].includes(delivery.status)).length} mission(s) en cours</div></div></div>`).join('')}</div></section>`;
+}
+
 function adminView() {
-  const s = metrics();
-  if (adminPage === 'team') return `${heading('Votre société', 'Livreurs', 'Gérez votre équipe et consultez sa disponibilité.', '<button class="button" id="addCourier">＋　Ajouter un livreur</button>')}<section class="team-grid">${couriers.map((c) => `<article class="team-card"><div class="team-card-head"><div class="avatar large">${initials(c.name)}</div><span class="status ${c.active ? '' : 'done'}">${c.active ? c.status : 'Hors ligne'}</span></div><h2>${escapeHtml(c.fullName)}</h2><div class="route">${escapeHtml(c.name)} · ${escapeHtml(c.phone)}</div><div class="team-card-foot"><span>${orders.filter((o) => o.courier === c.name && o.status === 'Livrée').length} livraisons terminées</span><button class="link-button" data-toggle-courier="${escapeHtml(c.name)}">${c.active ? 'Désactiver' : 'Activer'}</button></div></article>`).join('')}</section>`;
-  const rows = filteredOrders();
-  if (adminPage === 'deliveries') return `${heading('Opérations', 'Toutes les livraisons', 'Recherchez, filtrez et attribuez les commandes de votre société.', '<button class="button" id="openModal">＋　Nouvelle livraison</button>')}${tablePanel(rows, { actions: true })}`;
-  return `${heading('Espace administration', 'Bonjour, Aïcha <span style="font-size:23px">☀</span>', 'Voici un aperçu de l’activité de votre société aujourd’hui.', '<button class="button" id="openModal">＋　Nouvelle livraison</button>')}<section class="metrics">${metricCard('Livraisons du jour', s.total, 'Toutes les commandes enregistrées', '▣')}${metricCard('À prendre en charge', s.pending, 'En attente de collecte', '◷')}${metricCard('En cours', s.progress, 'Colis sur la route', '➜')}${metricCard('Livrées', s.done, 'Remises confirmées', '✓')}</section><div class="columns">${tablePanel(filteredOrders(orders.slice(0, 5)), { controls: false })}${activityPanel()}</div>`;
+  const stats = metrics();
+  if (adminPage === 'team') return `${heading('Votre société', 'Livreurs', 'Invitez les livreurs de votre équipe.', '<button class="button" id="addCourier">＋　Inviter un livreur</button>')}<section class="team-grid">${couriers.map((courier) => `<article class="team-card"><div class="team-card-head"><div class="avatar large">${initials(courier.full_name)}</div><span class="status ${courier.active ? '' : 'done'}">${courier.active ? 'Actif' : 'Désactivé'}</span></div><h2>${escapeHtml(courier.full_name)}</h2><div class="route">${escapeHtml(courier.phone || 'Téléphone non renseigné')}</div><div class="team-card-foot"><span>${deliveries.filter((item) => item.courier_id === courier.user_id && item.status === 'Livrée').length} livraisons terminées</span></div></article>`).join('') || '<div class="empty">Aucun livreur dans cette équipe.</div>'}</section>`;
+  if (adminPage === 'deliveries') return `${heading('Opérations', 'Toutes les livraisons', 'Recherchez, filtrez et attribuez les commandes de votre société.', '<button class="button" id="openDelivery">＋　Nouvelle livraison</button>')}${tablePanel(filteredDeliveries(), { assign: true })}`;
+  return `${heading('Espace administration', `Bonjour, ${escapeHtml(profile?.full_name?.split(' ')[0] || 'Administrateur')} <span style="font-size:23px">☀</span>`, 'Voici l’activité de votre société.', '<button class="button" id="openDelivery">＋　Nouvelle livraison</button>')}<section class="metrics">${metricCard('Livraisons', stats.total, 'Commandes enregistrées', '▣')}${metricCard('À prendre en charge', stats.pending, 'En attente de collecte', '◷')}${metricCard('En cours', stats.progress, 'Colis sur la route', '➜')}${metricCard('Livrées', stats.done, 'Remises confirmées', '✓')}</section><div class="columns">${tablePanel(filteredDeliveries(deliveries.slice(0, 5)), { controls: false })}${activityPanel()}</div>`;
 }
+
+function ownerView() {
+  return `${heading('Maintenance plateforme', 'Gestion des sociétés', 'Créez un espace administrateur pour une nouvelle société.', '<button class="button" id="createCompanyAdmin">＋　Créer une société</button>')}<section class="panel"><div class="panel-head"><div><h2>Accès propriétaire</h2><div class="route" style="margin-top:5px">Seul ce compte peut inviter les administrateurs de société.</div></div></div><div class="activity"><div class="activity-item"><div class="avatar">${initials(profile?.full_name || user?.email || 'P')}</div><div class="activity-text"><b>${escapeHtml(profile?.full_name || 'Compte propriétaire')}</b><br>${escapeHtml(user?.email || '')}<div class="activity-time">Propriétaire plateforme</div></div></div></div></section>`;
+}
+
+function courierCard(item, isAvailable) {
+  const action = isAvailable
+    ? `<button class="button small" data-accept="${item.id}">Accepter la mission</button>`
+    : item.status === 'À récupérer'
+      ? `<button class="button small" data-progress="${item.id}">Colis récupéré</button>`
+      : item.status === 'En cours'
+        ? `<button class="button small" data-complete="${item.id}">Confirmer la remise</button>` : '';
+  return `<article class="mission-card"><div class="mission-main"><div class="job-top"><span class="job-id">${escapeHtml(item.reference)}</span><span class="job-age">· ${formatTime(item.created_at)} · ${escapeHtml(item.parcel_type)}</span><span class="status ${statusClass(item.status)}">${escapeHtml(item.status)}</span></div><div class="job-route"><span class="route-dots"><i></i><i></i><i></i></span><span><b>${escapeHtml(item.pickup_address)}</b><br><span class="route">${escapeHtml(item.dropoff_address)}</span></span></div><div class="job-bottom"><span>Destinataire <b>${escapeHtml(item.recipient_name)}</b></span><span>☎ <b>${escapeHtml(item.recipient_phone)}</b></span></div></div><div class="mission-action">${action}</div></article>`;
+}
+
 function courierView() {
-  const assigned = orders.filter((o) => o.courier === currentCourier);
-  const available = orders.filter((o) => o.status === 'À attribuer');
-  const active = assigned.filter((o) => ['À récupérer', 'En cours'].includes(o.status));
-  const source = courierPage === 'history' ? assigned.filter((o) => o.status === 'Livrée') : [...active, ...available];
-  return `${heading('Espace livreur', courierPage === 'history' ? 'Historique des courses' : 'Bonjour, Kouassi <span style="font-size:23px">👋</span>', courierPage === 'history' ? 'Retrouvez les livraisons terminées.' : 'Vos missions du jour, au même endroit.', '')}<div class="courier-banner"><div><div class="eyebrow">Votre disponibilité</div><h2>Vous êtes en ligne</h2><p>Les missions disponibles apparaissent dans votre espace.</p></div><div class="available">Disponible</div></div><section class="delivery-cards">${metricCard('Missions terminées', assigned.filter((o) => o.status === 'Livrée').length, 'Aujourd’hui', '✓')}${metricCard('À effectuer', active.length, 'Collecte ou livraison', '➜')}</section><div class="columns courier-columns"><section class="panel"><div class="panel-head"><div><h2>${courierPage === 'history' ? 'Courses terminées' : 'Missions à effectuer'}</h2><div class="route" style="margin-top:5px">${courierPage === 'history' ? 'Vos remises confirmées' : 'Acceptez une course et mettez son statut à jour'}</div></div><span class="status ${source.length ? 'progress' : 'done'}">${source.length} ${courierPage === 'history' ? 'terminée(s)' : 'mission(s)'}</span></div>${source.length ? source.map((order) => courierCard(order, available.includes(order))).join('') : '<div class="empty">Aucune mission dans cette liste.</div>'}</section><section class="panel"><div class="panel-head"><div><h2>Les étapes</h2><div class="route" style="margin-top:5px">Suivez le statut de la course</div></div></div><div class="activity"><div class="activity-item"><div class="activity-icon">1</div><div class="activity-text"><b>Accepter la mission</b><br>Vérifiez les adresses avant de partir.</div></div><div class="activity-item"><div class="activity-icon">2</div><div class="activity-text"><b>Récupérer le colis</b><br>Confirmez la collecte dans le site.</div></div><div class="activity-item"><div class="activity-icon">3</div><div class="activity-text"><b>Confirmer la remise</b><br>Terminez la mission après remise au destinataire.</div></div></div></section></div>`;
+  const mine = deliveries.filter((item) => item.courier_id === currentCourierId());
+  const available = deliveries.filter((item) => item.status === 'À attribuer' && !item.courier_id);
+  const active = mine.filter((item) => ['À récupérer', 'En cours'].includes(item.status));
+  const source = courierPage === 'history' ? mine.filter((item) => item.status === 'Livrée') : [...active, ...available];
+  return `${heading('Espace livreur', courierPage === 'history' ? 'Historique des courses' : `Bonjour, ${escapeHtml(profile?.full_name?.split(' ')[0] || 'Livreur')} <span style="font-size:23px">👋</span>`, courierPage === 'history' ? 'Retrouvez les livraisons terminées.' : 'Vos missions du jour, au même endroit.')}<div class="courier-banner"><div><div class="eyebrow">Votre disponibilité</div><h2>Compte actif</h2><p>Les missions disponibles apparaissent dans votre espace.</p></div><div class="available">Disponible</div></div><section class="delivery-cards">${metricCard('Missions terminées', mine.filter((item) => item.status === 'Livrée').length, 'Au total', '✓')}${metricCard('À effectuer', active.length, 'Collecte ou livraison', '➜')}</section><div class="columns courier-columns"><section class="panel"><div class="panel-head"><div><h2>${courierPage === 'history' ? 'Courses terminées' : 'Missions à effectuer'}</h2><div class="route" style="margin-top:5px">${courierPage === 'history' ? 'Vos remises confirmées' : 'Acceptez une course et mettez son statut à jour'}</div></div><span class="status ${source.length ? 'progress' : 'done'}">${source.length} mission(s)</span></div>${source.length ? source.map((item) => courierCard(item, available.includes(item))).join('') : '<div class="empty">Aucune mission dans cette liste.</div>'}</section><section class="panel"><div class="panel-head"><div><h2>Les étapes</h2><div class="route" style="margin-top:5px">Suivez le statut de la course</div></div></div><div class="activity"><div class="activity-item"><div class="activity-icon">1</div><div class="activity-text"><b>Accepter la mission</b><br>Vérifiez les adresses avant de partir.</div></div><div class="activity-item"><div class="activity-icon">2</div><div class="activity-text"><b>Récupérer le colis</b><br>Confirmez la collecte dans le site.</div></div><div class="activity-item"><div class="activity-icon">3</div><div class="activity-text"><b>Confirmer la remise</b><br>Terminez la mission après remise au destinataire.</div></div></div></section></div>`;
 }
-function courierCard(order, isAvailable) {
-  let action = '';
-  if (isAvailable) action = `<button class="button small" data-accept="${order.id}">Accepter la mission</button>`;
-  else if (order.status === 'À récupérer') action = `<button class="button small" data-progress="${order.id}">Colis récupéré</button>`;
-  else if (order.status === 'En cours') action = `<button class="button small" data-complete="${order.id}">Confirmer la remise</button>`;
-  return `<article class="mission-card"><div class="mission-main"><div class="job-top"><span class="job-id">${escapeHtml(order.id)}</span><span class="job-age">· ${escapeHtml(order.time)} · ${escapeHtml(order.parcel)}</span><span class="status ${statusClass(order.status)}">${escapeHtml(order.status)}</span></div><div class="job-route"><span class="route-dots"><i></i><i></i><i></i></span><span><b>${escapeHtml(order.pickup)}</b><br><span class="route">${escapeHtml(order.dropoff)}</span></span></div><div class="job-bottom"><span>Destinataire <b>${escapeHtml(order.recipient)}</b></span><span>☎ <b>${escapeHtml(order.phone)}</b></span></div></div><div class="mission-action">${action}</div></article>`;
+
+function accountDialog() {
+  if (!accountModal) return '';
+  const owner = role === 'owner';
+  return `<div class="modal-backdrop open" id="accountBackdrop"><section class="modal"><div class="modal-head"><h2>${owner ? 'Créer un compte administrateur' : 'Inviter un livreur'}</h2><button class="close" type="button" id="closeAccount" aria-label="Fermer">×</button></div><form id="accountForm"><div class="form-grid">${owner ? '<div class="field full"><label>Nom de la société</label><input name="companyName" required minlength="2" placeholder="Ex. Atelier Colis"></div>' : ''}<div class="field full"><label>Nom complet</label><input name="fullName" required minlength="2" placeholder="Ex. Koffi Kouamé"></div><div class="field full"><label>Adresse e-mail</label><input name="email" type="email" required placeholder="personne@entreprise.com"></div><div class="field full"><label>Téléphone (facultatif)</label><input name="phone" type="tel" placeholder="+225 07 00 00 00 00"></div></div><div class="modal-footer"><button type="button" class="button secondary" id="cancelAccount">Annuler</button><button class="button">Envoyer l’invitation</button></div></form></section></div>`;
 }
+
+function loginView() {
+  return `<div class="login-wrap"><div class="login-card"><div class="login-brand"><span class="brand-mark">↗</span><span>colis<span style="color:var(--green)">.</span></span></div><div class="eyebrow">Espace professionnel</div><h1>${loginRole === 'courier' ? 'Connexion livreur' : 'Connexion administrateur'}</h1><p class="subtitle">${loginRole === 'courier' ? 'Connectez-vous pour consulter vos missions de livraison.' : 'Connectez-vous pour gérer votre société et votre équipe.'}</p><div class="login-tabs"><button type="button" class="${loginRole === 'admin' ? 'active' : ''}" data-login-role="admin">Administrateur</button><button type="button" class="${loginRole === 'courier' ? 'active' : ''}" data-login-role="courier">Livreur</button></div><form id="loginForm"><div class="field"><label>Adresse e-mail</label><input type="email" name="email" placeholder="vous@entreprise.com" autocomplete="username" required></div><div class="field"><label>Mot de passe</label><input type="password" name="password" placeholder="Votre mot de passe" autocomplete="current-password" required></div><div class="login-meta"><label><input type="checkbox" name="remember"> Rester connecté</label><a href="#mot-de-passe-oublie" data-forgot>Mot de passe oublié ?</a></div><button class="button login-submit">Se connecter</button></form><div class="login-foot">Les comptes sont créés sur invitation.</div>${supabaseReady ? '' : '<div class="demo-note"><b>Configuration à terminer</b><br>Ajoute la clé publique Supabase dans supabase-config.js pour activer les connexions.</div>'}</div><div class="login-side"><div class="login-side-copy"><span class="eyebrow">Livrez simplement</span><h2>Vos colis.<br>Votre équipe.<br>Votre espace.</h2><p>Un tableau clair pour coordonner les livraisons de votre société.</p></div><div class="login-side-foot">© 2026 Colis · Gestion des livraisons</div></div></div>`;
+}
+
 function render() {
-  if (view === 'login') {
-    document.body.classList.add('auth-mode');
-    $('#crumbLabel').textContent = loginRole === 'admin' ? 'Connexion administrateur' : 'Connexion livreur';
-    $('#app').innerHTML = `<div class="login-wrap"><div class="login-card"><div class="login-brand"><span class="brand-mark">↗</span><span>colis<span style="color:var(--green)">.</span></span></div><div class="eyebrow">Espace professionnel</div><h1>${loginRole === 'admin' ? 'Connexion administrateur' : 'Connexion livreur'}</h1><p class="subtitle">${loginRole === 'admin' ? 'Connectez-vous pour gérer votre société et votre équipe.' : 'Connectez-vous pour consulter vos missions de livraison.'}</p><div class="login-tabs"><button type="button" class="${loginRole === 'admin' ? 'active' : ''}" data-login-role="admin">Administrateur</button><button type="button" class="${loginRole === 'courier' ? 'active' : ''}" data-login-role="courier">Livreur</button></div><form id="loginForm"><div class="field"><label>Adresse e-mail</label><input type="email" name="email" placeholder="vous@entreprise.com" autocomplete="username" required></div><div class="field"><label>Mot de passe</label><input type="password" name="password" placeholder="Votre mot de passe" autocomplete="current-password" required></div><div class="login-meta"><label><input type="checkbox" name="remember"> Rester connecté</label><a href="#mot-de-passe-oublie" data-forgot>Mot de passe oublié ?</a></div><button class="button login-submit">Se connecter</button></form><div class="login-foot">Nouveau sur Colis ? <a href="#inscription" data-signup>Créer un compte société</a></div><div class="demo-note"><b>Aperçu de l’interface</b><br>La connexion réelle sera activée avec Supabase. Pour le moment, ce formulaire ouvre la maquette et ne vérifie pas les identifiants.</div></div><div class="login-side"><div class="login-side-copy"><span class="eyebrow">Livrez simplement</span><h2>Vos colis.<br>Votre équipe.<br>Votre espace.</h2><p>Un tableau clair pour coordonner les livraisons de votre société.</p></div><div class="login-side-foot">© 2026 Colis · Gestion des livraisons</div></div></div>`;
+  document.body.classList.toggle('auth-mode', view === 'login');
+  $('#logoutButton').style.display = view === 'login' ? 'none' : '';
+  $('#accountBackdrop')?.remove();
+  if (view === 'setup-password') {
+    $('#crumbLabel').textContent = 'Choisir un mot de passe';
     $('#sideNav').innerHTML = '';
-    document.querySelectorAll('[data-login-role]').forEach((button) => button.onclick = () => { loginRole = button.dataset.loginRole; window.location.hash = loginRole === 'admin' ? 'connexion-administrateur' : 'connexion-livreur'; render(); });
-    $('#loginForm').onsubmit = (event) => { event.preventDefault(); setRole(loginRole); toast('Mode aperçu : connexion réelle à configurer.'); };
-    $('[data-forgot]').onclick = (event) => { event.preventDefault(); toast('La récupération sera disponible après la connexion Supabase.'); };
-    $('[data-signup]').onclick = (event) => { event.preventDefault(); toast('La création de compte sera activée avec Supabase.'); };
+    $('#app').innerHTML = `<div class="login-wrap"><div class="login-card"><div class="login-brand"><span class="brand-mark">↗</span><span>colis<span style="color:var(--green)">.</span></span></div><div class="eyebrow">Activation du compte</div><h1>Choisir un mot de passe</h1><p class="subtitle">Crée un mot de passe pour terminer l’activation de ton compte.</p><form id="passwordSetupForm"><div class="field"><label>Nouveau mot de passe</label><input type="password" name="password" minlength="8" autocomplete="new-password" required></div><div class="field"><label>Confirmer le mot de passe</label><input type="password" name="confirmPassword" minlength="8" autocomplete="new-password" required></div><button class="button login-submit">Enregistrer le mot de passe</button></form></div><div class="login-side"><div class="login-side-copy"><span class="eyebrow">Livrez simplement</span><h2>Vos colis.<br>Votre équipe.<br>Votre espace.</h2></div></div></div>`;
+    $('#passwordSetupForm').onsubmit = saveNewPassword;
     return;
   }
-  document.body.classList.remove('auth-mode');
-  $('#logoutButton').onclick = () => showLogin(role);
-  $('#crumbLabel').textContent = role === 'admin' ? ({ overview: 'Vue d’ensemble', deliveries: 'Livraisons', team: 'Livreurs' }[adminPage]) : (courierPage === 'history' ? 'Historique' : 'Mes missions');
-  $('#app').innerHTML = role === 'admin' ? adminView() : courierView();
+  if (view === 'login') {
+    $('#crumbLabel').textContent = loginRole === 'courier' ? 'Connexion livreur' : 'Connexion administrateur';
+    $('#app').innerHTML = loginView();
+    $('#sideNav').innerHTML = '';
+    document.querySelectorAll('[data-login-role]').forEach((button) => button.onclick = () => { loginRole = button.dataset.loginRole; render(); });
+    $('#loginForm').onsubmit = signIn;
+    $('[data-forgot]').onclick = requestPasswordReset;
+    return;
+  }
+
+  const pageLabel = role === 'owner' ? 'Sociétés' : role === 'admin' ? ({ overview: 'Vue d’ensemble', deliveries: 'Livraisons', team: 'Livreurs' }[adminPage]) : (courierPage === 'history' ? 'Historique' : 'Mes missions');
+  $('#crumbLabel').textContent = pageLabel;
+  $('#roleLabel').textContent = role === 'owner' ? 'Espace propriétaire' : role === 'admin' ? 'Espace Administrateur' : 'Espace Livreur';
+  $('#profileName').innerHTML = `${escapeHtml(profile?.full_name || user?.email || '')}<br><span style="color:#8b958e;font-size:11px;font-weight:400">${role === 'owner' ? 'Propriétaire plateforme' : role === 'admin' ? `Administrateur · ${escapeHtml(profile?.company_name || '')}` : 'Livreur'}</span>`;
+  $('#sideNav').innerHTML = navItems().map(([key, icon, label]) => `<button class="${(role === 'owner' || role === 'admin' && adminPage === key || role === 'courier' && courierPage === key) ? 'active' : ''}" data-page="${key}"><span class="icon">${icon}</span>${label}</button>`).join('');
+  $('#app').innerHTML = role === 'owner' ? ownerView() : role === 'admin' ? adminView() : courierView();
+  if (accountModal) document.body.insertAdjacentHTML('beforeend', accountDialog());
+
+  $('#logoutButton').onclick = async () => {
+    const { error } = await supabase.auth.signOut({ scope: 'local' });
+    if (error) return showError(error);
+    user = null; profile = null; deliveries = []; couriers = []; showLogin('admin');
+  };
   $('#sideNav').querySelectorAll('[data-page]').forEach((button) => button.onclick = () => setPage(button.dataset.page));
   $('#app').querySelectorAll('[data-filter]').forEach((button) => button.onclick = () => { filter = button.dataset.filter; render(); });
   const search = $('#orderSearch');
-  if (search) search.oninput = () => { searchTerm = search.value; const start = search.selectionStart; render(); $('#orderSearch').focus(); $('#orderSearch').setSelectionRange(start, start); };
-  const modalButton = $('#openModal'); if (modalButton) modalButton.onclick = openDeliveryModal;
-  const exporter = $('#exportOrders'); if (exporter) exporter.onclick = exportOrders;
-  const addCourier = $('#addCourier'); if (addCourier) addCourier.onclick = openCourierModal;
+  if (search) search.oninput = () => { searchTerm = search.value; const start = search.selectionStart; render(); $('#orderSearch')?.focus(); $('#orderSearch')?.setSelectionRange(start, start); };
+  $('#openDelivery')?.addEventListener('click', openDeliveryDialog);
+  $('#addCourier')?.addEventListener('click', () => { accountModal = 'courier'; render(); });
+  $('#createCompanyAdmin')?.addEventListener('click', () => { accountModal = 'admin'; render(); });
+  $('#exportOrders')?.addEventListener('click', exportOrders);
+  $('#app').querySelectorAll('[data-assign]').forEach((select) => select.onchange = () => assignDelivery(select.dataset.assign, select.value || null));
   $('#app').querySelectorAll('[data-accept]').forEach((button) => button.onclick = () => acceptDelivery(button.dataset.accept));
-  $('#app').querySelectorAll('[data-progress]').forEach((button) => button.onclick = () => progressDelivery(button.dataset.progress));
-  $('#app').querySelectorAll('[data-complete]').forEach((button) => button.onclick = () => completeDelivery(button.dataset.complete));
-  $('#app').querySelectorAll('[data-assign]').forEach((select) => select.onchange = () => assignDelivery(select.dataset.assign, select.value));
-  $('#app').querySelectorAll('[data-toggle-courier]').forEach((button) => button.onclick = () => toggleCourier(button.dataset.toggleCourier));
+  $('#app').querySelectorAll('[data-progress]').forEach((button) => button.onclick = () => updateDeliveryStatus(button.dataset.progress, 'En cours'));
+  $('#app').querySelectorAll('[data-complete]').forEach((button) => button.onclick = () => updateDeliveryStatus(button.dataset.complete, 'Livrée'));
   $('#app').querySelectorAll('[data-goto]').forEach((button) => button.onclick = () => setPage(button.dataset.goto));
+  $('#closeAccount')?.addEventListener('click', closeAccountDialog);
+  $('#cancelAccount')?.addEventListener('click', closeAccountDialog);
+  $('#accountBackdrop')?.addEventListener('click', (event) => { if (event.target.id === 'accountBackdrop') closeAccountDialog(); });
+  $('#accountForm')?.addEventListener('submit', submitAccountInvite);
 }
-function assignDelivery(id, courierName) {
-  const order = orders.find((item) => item.id === id); if (!order) return;
-  order.courier = courierName;
-  order.status = courierName === 'À attribuer' ? 'À attribuer' : 'À récupérer';
-  save(); render(); toast(courierName === 'À attribuer' ? 'Livreur retiré de la mission.' : `Mission attribuée à ${courierName}.`);
-}
-function acceptDelivery(id) { const order = orders.find((item) => item.id === id); if (!order) return; order.courier = currentCourier; order.status = 'À récupérer'; save(); render(); toast('Mission acceptée.'); }
-function progressDelivery(id) { const order = orders.find((item) => item.id === id); if (!order) return; order.status = 'En cours'; save(); render(); toast('Collecte confirmée. Bonne route !'); }
-function completeDelivery(id) { const order = orders.find((item) => item.id === id); if (!order) return; order.status = 'Livrée'; save(); render(); toast('Remise confirmée. Mission terminée !'); }
-function toggleCourier(name) { const courier = couriers.find((item) => item.name === name); if (!courier) return; courier.active = !courier.active; courier.status = courier.active ? 'Disponible' : 'Hors ligne'; save(); render(); toast(courier.active ? 'Livreur activé.' : 'Livreur désactivé.'); }
-function closeModal() { $('#modalBackdrop').classList.remove('open'); }
-function exportOrders() {
-  const rows = [['Commande', 'Destinataire', 'Téléphone', 'Collecte', 'Livraison', 'Livreur', 'Statut'], ...orders.map((o) => [o.id, o.recipient, o.phone, o.pickup, o.dropoff, o.courier, o.status])];
-  const csv = '\uFEFF' + rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(';')).join('\r\n');
-  const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); link.download = 'livraisons-colis.csv'; link.click(); URL.revokeObjectURL(link.href); toast('Export téléchargé.');
-}
-function openDeliveryModal() {
-  const select = $('#deliveryForm select[name="courier"]');
-  select.innerHTML = `<option value="À attribuer">À attribuer</option>${couriers.filter((courier) => courier.active).map((courier) => `<option value="${escapeHtml(courier.name)}">${escapeHtml(courier.name)}</option>`).join('')}`;
-  $('#modalBackdrop').classList.add('open');
-}
-function openCourierModal() {
-  let modal = $('#courierModalBackdrop');
-  if (!modal) {
-    modal = document.createElement('div'); modal.id = 'courierModalBackdrop'; modal.className = 'modal-backdrop';
-    modal.innerHTML = `<section class="modal"><div class="modal-head"><h2>Ajouter un livreur</h2><button class="close" type="button" aria-label="Fermer">×</button></div><form id="courierForm"><div class="form-grid"><div class="field full"><label>Nom complet</label><input name="fullName" required placeholder="Ex. Koffi Kouamé"></div><div class="field full"><label>Téléphone</label><input name="phone" required placeholder="+225 07 00 00 00 00"></div></div><div class="modal-footer"><button type="button" class="button secondary" data-cancel>Annuler</button><button class="button">Ajouter à l’équipe</button></div></form></section>`;
-    document.body.append(modal);
-    modal.onclick = (event) => { if (event.target === modal || event.target.closest('.close') || event.target.closest('[data-cancel]')) modal.classList.remove('open'); };
-    $('#courierForm').onsubmit = (event) => {
-      event.preventDefault(); const data = Object.fromEntries(new FormData(event.currentTarget)); const words = data.fullName.trim().split(/\s+/); const shortName = `${words[0][0]}. ${words.at(-1)}`;
-      if (couriers.some((courier) => courier.name.toLowerCase() === shortName.toLowerCase())) { toast('Ce livreur figure déjà dans votre équipe.'); return; }
-      couriers.push({ name: shortName, fullName: data.fullName.trim(), phone: data.phone.trim(), status: 'Disponible', active: true }); save(); modal.classList.remove('open'); event.currentTarget.reset(); render(); toast('Livreur ajouté à l’équipe.');
-    };
+
+async function loadProfile() {
+  const { data: owner, error: ownerError } = await supabase.from('platform_owners').select('user_id').eq('user_id', user.id).maybeSingle();
+  if (ownerError) throw ownerError;
+  if (owner) {
+    role = 'owner';
+    profile = { full_name: user.user_metadata?.full_name || user.email };
+    return;
   }
-  modal.classList.add('open');
+  const { data: member, error } = await supabase.from('company_members').select('user_id,company_id,role,full_name,phone,active,companies(name)').eq('user_id', user.id).maybeSingle();
+  if (error) throw error;
+  if (!member || !member.active) throw new Error('Ce compte ne possède pas de rôle actif. Contacte le propriétaire du site.');
+  role = member.role;
+  profile = { ...member, company_name: member.companies?.name || '' };
 }
-$('#closeModal').onclick = closeModal;
-$('#cancelModal').onclick = closeModal;
-$('#modalBackdrop').onclick = (event) => { if (event.target.id === 'modalBackdrop') closeModal(); };
-document.querySelectorAll('[data-role]').forEach((button) => button.onclick = () => setRole(button.dataset.role));
-$('#deliveryForm').onsubmit = (event) => {
+
+async function loadWorkspace() {
+  if (role === 'owner') {
+    deliveries = [];
+    couriers = [];
+    return;
+  }
+  const { data: deliveryRows, error: deliveryError } = await supabase.from('deliveries').select('id,company_id,courier_id,reference,recipient_name,recipient_phone,pickup_address,dropoff_address,parcel_type,status,created_at,delivered_at,courier:company_members!deliveries_courier_id_fkey(full_name,phone)').order('created_at', { ascending: false });
+  if (deliveryError) throw deliveryError;
+  deliveries = (deliveryRows || []).map((item) => ({ ...item, courier_name: item.courier?.full_name || 'À attribuer' }));
+  if (role === 'admin') {
+    const { data, error } = await supabase.from('company_members').select('user_id,full_name,phone,active').eq('company_id', profile.company_id).eq('role', 'courier').order('full_name');
+    if (error) throw error;
+    couriers = data || [];
+  } else {
+    couriers = [];
+  }
+}
+
+async function signIn(event) {
   event.preventDefault();
-  const data = Object.fromEntries(new FormData(event.currentTarget));
-  const assigned = data.courier && data.courier !== 'À attribuer';
-  const nextNumber = Math.max(2048, ...orders.map((order) => Number(order.id.replace('CL-', '')) || 0)) + 1;
-  orders.unshift({ id: `CL-${nextNumber}`, recipient: data.recipient, phone: data.phone, pickup: data.pickup, dropoff: data.dropoff, courier: data.courier || 'À attribuer', status: assigned ? 'À récupérer' : 'À attribuer', parcel: data.parcel, time: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) });
-  save(); filter = 'Tous'; searchTerm = ''; event.currentTarget.reset(); closeModal(); setRole('admin'); toast('Nouvelle livraison enregistrée.');
-};
-loginRole = window.location.hash === '#connexion-livreur' || window.location.hash === '#livreur' ? 'courier' : 'admin';
-render();
+  if (!supabaseReady) return toast('La clé publique Supabase manque dans supabase-config.js.');
+  const form = new FormData(event.currentTarget);
+  const { data, error } = await supabase.auth.signInWithPassword({ email: form.get('email'), password: form.get('password') });
+  if (error) return showError(error, 'Adresse e-mail ou mot de passe incorrect.');
+  user = data.user;
+  try {
+    await loadProfile();
+    await loadWorkspace();
+    if (role === 'courier' && loginRole === 'admin') toast('Ce compte est livreur : son accès est limité à l’espace livreur.');
+    view = needsPasswordSetup ? 'setup-password' : 'dashboard';
+    window.location.hash = role === 'owner' ? 'maintenance' : role === 'admin' ? 'administration' : 'livreur';
+    render();
+  } catch (loadError) {
+    await supabase.auth.signOut({ scope: 'local' });
+    user = null; profile = null;
+    showLogin(loginRole);
+    showError(loadError, 'Impossible de charger les droits de ce compte.');
+  }
+}
+
+async function saveNewPassword(event) {
+  event.preventDefault();
+  const values = Object.fromEntries(new FormData(event.currentTarget));
+  if (values.password !== values.confirmPassword) return toast('Les deux mots de passe ne correspondent pas.');
+  const { error } = await supabase.auth.updateUser({ password: values.password });
+  if (error) return showError(error, 'Le mot de passe n’a pas pu être enregistré.');
+  needsPasswordSetup = false;
+  window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  view = 'dashboard';
+  render();
+  toast('Mot de passe enregistré. Bienvenue sur Colis.');
+}
+
+async function requestPasswordReset(event) {
+  event.preventDefault();
+  if (!supabaseReady) return toast('La clé publique Supabase manque dans supabase-config.js.');
+  const email = $('#loginForm [name="email"]').value.trim();
+  if (!email) return toast('Saisis ton adresse e-mail avant de demander un lien.');
+  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+  if (error) return showError(error);
+  toast('Un lien de réinitialisation a été envoyé si le compte existe.');
+}
+
+async function submitAccountInvite(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const body = {
+    action: role === 'owner' ? 'create_company_admin' : 'create_courier',
+    email: String(form.get('email') || '').trim(),
+    fullName: String(form.get('fullName') || '').trim(),
+    phone: String(form.get('phone') || '').trim(),
+    ...(role === 'owner' ? { companyName: String(form.get('companyName') || '').trim() } : {}),
+  };
+  const { data, error } = await supabase.functions.invoke('manage-accounts', { body });
+  if (error) return showError(error, 'L’invitation n’a pas pu être envoyée.');
+  if (data?.error) return toast(data.error);
+  accountModal = null;
+  render();
+  toast(data?.message || 'Invitation envoyée.');
+  await loadWorkspace();
+  render();
+}
+
+function openDeliveryDialog() {
+  if (role !== 'admin') return;
+  const activeCouriers = couriers.filter((courier) => courier.active);
+  const modal = document.createElement('div');
+  modal.className = 'modal-backdrop open';
+  modal.id = 'deliveryBackdrop';
+  modal.innerHTML = `<section class="modal"><div class="modal-head"><h2>Créer une livraison</h2><button class="close" type="button" aria-label="Fermer" data-close>×</button></div><form id="deliveryForm"><div class="form-grid"><div class="field"><label>Nom du destinataire</label><input name="recipient" required placeholder="Ex. Koffi Yao"></div><div class="field"><label>Téléphone</label><input name="phone" required placeholder="+225 07 00 00 00 00"></div><div class="field full"><label>Adresse de collecte</label><input name="pickup" required placeholder="Quartier, rue, repère"></div><div class="field full"><label>Adresse de livraison</label><input name="dropoff" required placeholder="Quartier, rue, repère"></div><div class="field"><label>Type de colis</label><select name="parcel"><option>Petit colis</option><option>Document</option><option>Colis standard</option><option>Colis volumineux</option></select></div><div class="field"><label>Livreur</label><select name="courier"><option value="">À attribuer</option>${activeCouriers.map((courier) => `<option value="${courier.user_id}">${escapeHtml(courier.full_name)}</option>`).join('')}</select></div></div><div class="modal-footer"><button type="button" class="button secondary" data-close>Annuler</button><button class="button">Enregistrer la livraison</button></div></form></section>`;
+  document.body.append(modal);
+  modal.addEventListener('click', (event) => { if (event.target === modal || event.target.closest('[data-close]')) modal.remove(); });
+  $('#deliveryForm').addEventListener('submit', createDelivery);
+}
+
+async function createDelivery(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const nextNumber = Date.now().toString().slice(-8);
+  const payload = {
+    company_id: profile.company_id,
+    courier_id: form.get('courier') || null,
+    reference: `CL-${nextNumber}`,
+    recipient_name: String(form.get('recipient')).trim(),
+    recipient_phone: String(form.get('phone')).trim(),
+    pickup_address: String(form.get('pickup')).trim(),
+    dropoff_address: String(form.get('dropoff')).trim(),
+    parcel_type: form.get('parcel'),
+    status: form.get('courier') ? 'À récupérer' : 'À attribuer',
+    created_by: user.id,
+  };
+  const { error } = await supabase.from('deliveries').insert(payload);
+  if (error) return showError(error, 'La livraison n’a pas pu être enregistrée.');
+  $('#deliveryBackdrop')?.remove();
+  await refreshWorkspace();
+  adminPage = 'deliveries'; render(); toast('Nouvelle livraison enregistrée.');
+}
+
+async function assignDelivery(id, courierId) {
+  const { error } = await supabase.rpc('admin_assign_delivery', { p_delivery_id: id, p_courier_id: courierId });
+  if (error) return showError(error, 'Le livreur n’a pas pu être attribué.');
+  await refreshWorkspace(); render(); toast(courierId ? 'Mission attribuée.' : 'Livreur retiré de la mission.');
+}
+
+async function acceptDelivery(id) {
+  const { error } = await supabase.rpc('courier_accept_delivery', { p_delivery_id: id });
+  if (error) return showError(error, 'Cette mission n’est peut-être plus disponible.');
+  await refreshWorkspace(); render(); toast('Mission acceptée.');
+}
+
+async function updateDeliveryStatus(id, status) {
+  const { error } = await supabase.rpc('courier_set_delivery_status', { p_delivery_id: id, p_status: status });
+  if (error) return showError(error, 'Le statut de la livraison n’a pas pu être mis à jour.');
+  await refreshWorkspace(); render(); toast(status === 'Livrée' ? 'Remise confirmée. Mission terminée !' : 'Collecte confirmée. Bonne route !');
+}
+
+async function refreshWorkspace() {
+  try { await loadWorkspace(); } catch (error) { showError(error, 'Impossible d’actualiser les informations.'); }
+}
+
+function closeAccountDialog() { accountModal = null; render(); }
+
+function exportOrders() {
+  const rows = [['Commande', 'Destinataire', 'Téléphone', 'Collecte', 'Livraison', 'Livreur', 'Statut'], ...deliveries.map((item) => [item.reference, item.recipient_name, item.recipient_phone, item.pickup_address, item.dropoff_address, item.courier_name, item.status])];
+  const csv = '\uFEFF' + rows.map((row) => row.map((value) => `"${String(value ?? '').replaceAll('"', '""')}"`).join(';')).join('\r\n');
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  link.download = 'livraisons-colis.csv'; link.click(); URL.revokeObjectURL(link.href);
+}
+
+async function handleSession(session, eventName = '') {
+  if (!session?.user) { user = null; profile = null; role = 'admin'; view = 'login'; render(); return; }
+  if (eventName === 'PASSWORD_RECOVERY') needsPasswordSetup = true;
+  user = session.user;
+  try {
+    await loadProfile();
+    await loadWorkspace();
+    view = needsPasswordSetup ? 'setup-password' : 'dashboard';
+    render();
+  } catch (error) {
+    await supabase.auth.signOut({ scope: 'local' });
+    user = null; profile = null; view = 'login'; render(); showError(error, 'Ce compte ne possède pas de rôle actif.');
+  }
+}
+
+if (!supabaseReady) {
+  showLogin('admin');
+} else {
+  supabase.auth.onAuthStateChange((eventName, session) => {
+    // Run after this callback completes to avoid blocking Supabase auth events.
+    if (session?.user) setTimeout(() => handleSession(session, eventName), 0);
+    else { user = null; profile = null; role = 'admin'; view = 'login'; render(); }
+  });
+  supabase.auth.getSession().then(({ data }) => { if (data.session) handleSession(data.session); else showLogin(window.location.hash.includes('livreur') ? 'courier' : 'admin'); });
+}
