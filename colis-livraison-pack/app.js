@@ -16,6 +16,14 @@ let courierPage = 'missions';
 let filter = 'Tous';
 let searchTerm = '';
 let accountModal = null;
+let ownerCompanies = [];
+let ownerCompaniesError = '';
+let generatedInvite = (() => {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem('colisPendingInvite') || 'null');
+    return saved && saved.creatorId && Date.now() - saved.createdAt < 24 * 60 * 60 * 1000 ? saved : null;
+  } catch { return null; }
+})();
 let needsPasswordSetup = window.location.hash.includes('type=invite') || window.location.hash.includes('type=recovery');
 
 const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
@@ -104,7 +112,21 @@ function adminView() {
 }
 
 function ownerView() {
-  return `${heading('Maintenance plateforme', 'Gestion des sociétés', 'Créez un espace administrateur pour une nouvelle société.', '<button class="button" id="createCompanyAdmin">＋　Créer une société</button>')}<section class="panel"><div class="panel-head"><div><h2>Accès propriétaire</h2><div class="route" style="margin-top:5px">Seul ce compte peut inviter les administrateurs de société.</div></div></div><div class="activity"><div class="activity-item"><div class="avatar">${initials(profile?.full_name || user?.email || 'P')}</div><div class="activity-text"><b>${escapeHtml(profile?.full_name || 'Compte propriétaire')}</b><br>${escapeHtml(user?.email || '')}<div class="activity-time">Propriétaire plateforme</div></div></div></div></section>`;
+  const companyRows = ownerCompanies.map((company) => `<article class="team-card"><div class="team-card-head"><div class="avatar large">${initials(company.company_name)}</div><span class="status ${company.activated ? '' : 'waiting'}">${company.activated ? 'Compte activé' : 'Activation en attente'}</span></div><h2>${escapeHtml(company.company_name)}</h2><div class="route">Administrateur : ${escapeHtml(company.admin_name)} · ${escapeHtml(company.admin_email)}</div><div class="team-card-foot"><span>${company.activated ? 'L’administrateur a activé son compte.' : 'L’administrateur doit terminer l’activation.'}</span><button class="button small" data-reissue-admin="${escapeHtml(company.admin_user_id)}">${company.activated ? 'Récupérer l’accès' : 'Récupérer le lien'}</button></div></article>`).join('');
+  const emptyCompanies = ownerCompaniesError
+    ? `<div class="empty">${escapeHtml(ownerCompaniesError)}</div>`
+    : '<div class="empty">Aucune société créée pour le moment.</div>';
+  return `${heading('Maintenance plateforme', 'Gestion des sociétés', 'Créez et suivez les espaces administrateur des sociétés.', '<button class="button" id="createCompanyAdmin">＋　Créer une société</button>')}<section class="panel"><div class="panel-head"><div><h2>Accès propriétaire</h2><div class="route" style="margin-top:5px">Seul ce compte peut gérer les administrateurs de société.</div></div></div><div class="activity"><div class="activity-item"><div class="avatar">${initials(profile?.full_name || user?.email || 'P')}</div><div class="activity-text"><b>${escapeHtml(profile?.full_name || 'Compte propriétaire')}</b><br>${escapeHtml(user?.email || '')}<div class="activity-time">Propriétaire plateforme</div></div></div></div></section><section class="panel" style="margin-top:16px"><div class="panel-head"><div><h2>Sociétés enregistrées</h2><div class="route" style="margin-top:5px">${ownerCompanies.length} société(s)</div></div></div><div class="team-grid">${companyRows || emptyCompanies}</div></section>`;
+}
+
+function rememberInvite(invite) {
+  generatedInvite = { ...invite, creatorId: user?.id, createdAt: Date.now() };
+  try { sessionStorage.setItem('colisPendingInvite', JSON.stringify(generatedInvite)); } catch { /* The link still remains available in this page session. */ }
+}
+
+function clearRememberedInvite() {
+  generatedInvite = null;
+  try { sessionStorage.removeItem('colisPendingInvite'); } catch { /* Ignore storage restrictions. */ }
 }
 
 function courierCard(item, isAvailable) {
@@ -131,6 +153,12 @@ function accountDialog() {
   return `<div class="modal-backdrop open" id="accountBackdrop"><section class="modal"><div class="modal-head"><h2>${owner ? 'Créer un compte administrateur' : 'Inviter un livreur'}</h2><button class="close" type="button" id="closeAccount" aria-label="Fermer">×</button></div><form id="accountForm"><div class="form-grid">${owner ? '<div class="field full"><label>Nom de la société</label><input name="companyName" required minlength="2" placeholder="Ex. Atelier Colis"></div>' : ''}<div class="field full"><label>Nom complet</label><input name="fullName" required minlength="2" placeholder="Ex. Koffi Kouamé"></div><div class="field full"><label>Adresse e-mail</label><input name="email" type="email" required placeholder="personne@entreprise.com"></div><div class="field full"><label>Téléphone (facultatif)</label><input name="phone" type="tel" placeholder="+225 07 00 00 00 00"></div></div><div class="modal-footer"><button type="button" class="button secondary" id="cancelAccount">Annuler</button><button class="button">Envoyer l’invitation</button></div></form></section></div>`;
 }
 
+function inviteLinkDialog() {
+  if (!generatedInvite) return '';
+  const recovery = generatedInvite.kind === 'recovery';
+  return `<div class="modal-backdrop open" id="inviteLinkBackdrop"><section class="modal"><div class="modal-head"><h2>${recovery ? 'Lien de récupération prêt' : 'Lien d’activation prêt'}</h2><button class="close" type="button" id="closeInviteLink" aria-label="Fermer">×</button></div><p class="subtitle">Envoie ce lien directement à <b>${escapeHtml(generatedInvite.email)}</b> par message privé pour que la personne ${recovery ? 'choisisse un nouveau mot de passe' : 'choisisse son mot de passe'}.</p><div class="field"><label>Lien à partager</label><input id="inviteLinkValue" type="text" readonly value="${escapeHtml(generatedInvite.url)}"></div><p class="route">Ce lien donne accès au compte : partage-le uniquement avec la personne concernée et ne le publie pas.</p><div class="modal-footer"><button class="button secondary" type="button" id="closeInviteLinkSecondary">Fermer</button><button class="button" type="button" id="copyInviteLink">Copier le lien</button></div></section></div>`;
+}
+
 function loginView() {
   return `<div class="login-wrap"><div class="login-card"><div class="login-brand"><span class="brand-mark">↗</span><span>colis<span style="color:var(--green)">.</span></span></div><div class="eyebrow">Espace professionnel</div><h1>${loginRole === 'courier' ? 'Connexion livreur' : 'Connexion administrateur'}</h1><p class="subtitle">${loginRole === 'courier' ? 'Connectez-vous pour consulter vos missions de livraison.' : 'Connectez-vous pour gérer votre société et votre équipe.'}</p><div class="login-tabs"><button type="button" class="${loginRole === 'admin' ? 'active' : ''}" data-login-role="admin">Administrateur</button><button type="button" class="${loginRole === 'courier' ? 'active' : ''}" data-login-role="courier">Livreur</button></div><form id="loginForm"><div class="field"><label>Adresse e-mail</label><input type="email" name="email" placeholder="vous@entreprise.com" autocomplete="username" required></div><div class="field"><label>Mot de passe</label><input type="password" name="password" placeholder="Votre mot de passe" autocomplete="current-password" required></div><div class="login-meta"><label><input type="checkbox" name="remember"> Rester connecté</label><a href="#mot-de-passe-oublie" data-forgot>Mot de passe oublié ?</a></div><button class="button login-submit">Se connecter</button></form><div class="login-foot">Les comptes sont créés sur invitation.</div>${supabaseReady ? '' : '<div class="demo-note"><b>Configuration à terminer</b><br>Ajoute la clé publique Supabase dans supabase-config.js pour activer les connexions.</div>'}</div><div class="login-side"><div class="login-side-copy"><span class="eyebrow">Livrez simplement</span><h2>Vos colis.<br>Votre équipe.<br>Votre espace.</h2><p>Un tableau clair pour coordonner les livraisons de votre société.</p></div><div class="login-side-foot">© 2026 Colis · Gestion des livraisons</div></div></div>`;
 }
@@ -139,6 +167,7 @@ function render() {
   document.body.classList.toggle('auth-mode', view === 'login');
   $('#logoutButton').style.display = view === 'login' ? 'none' : '';
   $('#accountBackdrop')?.remove();
+  $('#inviteLinkBackdrop')?.remove();
   if (view === 'setup-password') {
     $('#crumbLabel').textContent = 'Choisir un mot de passe';
     $('#sideNav').innerHTML = '';
@@ -163,6 +192,7 @@ function render() {
   $('#sideNav').innerHTML = navItems().map(([key, icon, label]) => `<button class="${(role === 'owner' || role === 'admin' && adminPage === key || role === 'courier' && courierPage === key) ? 'active' : ''}" data-page="${key}"><span class="icon">${icon}</span>${label}</button>`).join('');
   $('#app').innerHTML = role === 'owner' ? ownerView() : role === 'admin' ? adminView() : courierView();
   if (accountModal) document.body.insertAdjacentHTML('beforeend', accountDialog());
+  if (view === 'dashboard' && generatedInvite?.creatorId === user?.id) document.body.insertAdjacentHTML('beforeend', inviteLinkDialog());
 
   $('#logoutButton').onclick = async () => {
     const { error } = await supabase.auth.signOut({ scope: 'local' });
@@ -176,6 +206,7 @@ function render() {
   $('#openDelivery')?.addEventListener('click', openDeliveryDialog);
   $('#addCourier')?.addEventListener('click', () => { accountModal = 'courier'; render(); });
   $('#createCompanyAdmin')?.addEventListener('click', () => { accountModal = 'admin'; render(); });
+  $('#app').querySelectorAll('[data-reissue-admin]').forEach((button) => button.onclick = () => reissueAdminLink(button.dataset.reissueAdmin));
   $('#exportOrders')?.addEventListener('click', exportOrders);
   $('#app').querySelectorAll('[data-assign]').forEach((select) => select.onchange = () => assignDelivery(select.dataset.assign, select.value || null));
   $('#app').querySelectorAll('[data-accept]').forEach((button) => button.onclick = () => acceptDelivery(button.dataset.accept));
@@ -186,6 +217,19 @@ function render() {
   $('#cancelAccount')?.addEventListener('click', closeAccountDialog);
   $('#accountBackdrop')?.addEventListener('click', (event) => { if (event.target.id === 'accountBackdrop') closeAccountDialog(); });
   $('#accountForm')?.addEventListener('submit', submitAccountInvite);
+  $('#copyInviteLink')?.addEventListener('click', async () => {
+    const input = $('#inviteLinkValue');
+    try {
+      await navigator.clipboard.writeText(generatedInvite.url);
+      toast('Lien copié. Envoie-le à la personne invitée.');
+    } catch {
+      input?.select();
+      toast('Sélectionne le lien puis copie-le manuellement.');
+    }
+  });
+  const closeInviteLink = () => { clearRememberedInvite(); render(); };
+  $('#closeInviteLink')?.addEventListener('click', closeInviteLink);
+  $('#closeInviteLinkSecondary')?.addEventListener('click', closeInviteLink);
 }
 
 async function loadProfile() {
@@ -207,6 +251,7 @@ async function loadWorkspace() {
   if (role === 'owner') {
     deliveries = [];
     couriers = [];
+    await loadOwnerCompanies();
     return;
   }
   const { data: deliveryRows, error: deliveryError } = await supabase.from('deliveries').select('id,company_id,courier_id,reference,recipient_name,recipient_phone,pickup_address,dropoff_address,parcel_type,status,created_at,delivered_at,courier:company_members!deliveries_courier_id_fkey(full_name,phone)').order('created_at', { ascending: false });
@@ -219,6 +264,27 @@ async function loadWorkspace() {
   } else {
     couriers = [];
   }
+}
+
+async function loadOwnerCompanies() {
+  ownerCompaniesError = '';
+  const { data, error } = await supabase.functions.invoke('manage-accounts', { body: { action: 'list_companies' } });
+  if (error || data?.error) {
+    ownerCompanies = [];
+    ownerCompaniesError = 'La liste des sociétés n’a pas pu être chargée. Actualise la page ou vérifie le déploiement de la fonction Supabase.';
+    console.error(error || data?.error);
+    return;
+  }
+  ownerCompanies = Array.isArray(data?.companies) ? data.companies : [];
+}
+
+async function reissueAdminLink(userId) {
+  const { data, error } = await supabase.functions.invoke('manage-accounts', { body: { action: 'reissue_admin_link', userId } });
+  if (error) return showError(error, 'Le lien d’activation n’a pas pu être créé.');
+  if (data?.error) return toast(data.error);
+  rememberInvite({ email: data.email, url: data.activationUrl, kind: 'recovery' });
+  render();
+  toast('Lien de récupération prêt. Partage-le en privé avec l’administrateur.');
 }
 
 async function signIn(event) {
@@ -280,9 +346,10 @@ async function submitAccountInvite(event) {
   if (error) return showError(error, 'L’invitation n’a pas pu être envoyée.');
   if (data?.error) return toast(data.error);
   accountModal = null;
+  if (data?.invitationUrl) rememberInvite({ email: body.email, url: data.invitationUrl });
   render();
-  toast(data?.message || 'Invitation envoyée.');
-  await loadWorkspace();
+  toast(data?.message || 'Lien d’activation créé.');
+  if (role === 'owner') await loadOwnerCompanies();
   render();
 }
 
@@ -355,6 +422,7 @@ function exportOrders() {
 
 async function handleSession(session, eventName = '') {
   if (!session?.user) { user = null; profile = null; role = 'admin'; view = 'login'; render(); return; }
+  if (generatedInvite && generatedInvite.creatorId !== session.user.id) clearRememberedInvite();
   if (eventName === 'PASSWORD_RECOVERY') needsPasswordSetup = true;
   user = session.user;
   try {
