@@ -19,12 +19,13 @@
     .avatar.large{height:44px;width:44px;font-size:13px}
     .team-card h2{margin-bottom:5px}
     .team-card-foot{border-top:1px solid var(--line);margin-top:17px;padding-top:13px;display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:11px}
+    .team-card-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px;flex-wrap:wrap}
     .mission-card{padding:17px;border:1px solid var(--line);border-radius:11px;margin-bottom:10px;display:grid;grid-template-columns:1fr auto;gap:15px}
     .job-top{flex-wrap:wrap}
     .mission-action{display:flex;align-items:flex-end;justify-content:flex-end}
     .courier-columns{grid-template-columns:minmax(0,1.45fr) minmax(260px,.8fr)}
     .heading h1{line-height:1.2}
-    @media(max-width:680px){.team-grid{grid-template-columns:1fr}.mission-card{grid-template-columns:1fr}.mission-action{justify-content:flex-start}.courier-columns{grid-template-columns:1fr}.table-tools{align-items:flex-start;flex-direction:column}.search{max-width:none;width:100%}.assign-select{max-width:115px}}
+    @media(max-width:680px){.team-grid{grid-template-columns:1fr}.team-card-foot{align-items:flex-start;flex-direction:column;gap:10px}.team-card-actions{justify-content:flex-start}.mission-card{grid-template-columns:1fr}.mission-action{justify-content:flex-start}.courier-columns{grid-template-columns:1fr}.table-tools{align-items:flex-start;flex-direction:column}.search{max-width:none;width:100%}.assign-select{max-width:115px}}
   </style>
   <style>
     .auth-mode .sidebar,.auth-mode .topbar{display:none}

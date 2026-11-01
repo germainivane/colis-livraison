@@ -112,7 +112,7 @@ function adminView() {
 }
 
 function ownerView() {
-  const companyRows = ownerCompanies.map((company) => `<article class="team-card"><div class="team-card-head"><div class="avatar large">${initials(company.company_name)}</div><span class="status ${company.activated ? '' : 'waiting'}">${company.activated ? 'Compte activé' : 'Activation en attente'}</span></div><h2>${escapeHtml(company.company_name)}</h2><div class="route">Administrateur : ${escapeHtml(company.admin_name)} · ${escapeHtml(company.admin_email)}</div><div class="team-card-foot"><span>${company.activated ? 'L’administrateur a activé son compte.' : 'L’administrateur doit terminer l’activation.'}</span><button class="button small" data-reissue-admin="${escapeHtml(company.admin_user_id)}">${company.activated ? 'Récupérer l’accès' : 'Récupérer le lien'}</button></div></article>`).join('');
+  const companyRows = ownerCompanies.map((company) => `<article class="team-card"><div class="team-card-head"><div class="avatar large">${initials(company.company_name)}</div><span class="status ${company.active ? '' : 'done'}">${company.active ? (company.activated ? 'Société active' : 'Activation en attente') : 'Société désactivée'}</span></div><h2>${escapeHtml(company.company_name)}</h2><div class="route">Administrateur : ${escapeHtml(company.admin_name)} · ${escapeHtml(company.admin_email)}</div><div class="team-card-foot"><span>${company.active ? (company.activated ? 'L’administrateur a activé son compte.' : 'L’administrateur doit terminer l’activation.') : 'Accès bloqué · historique conservé'}</span><div class="team-card-actions"><button class="button small secondary" data-company-active="${escapeHtml(company.company_id)}" data-company-name="${escapeHtml(company.company_name)}" data-next-active="${company.active ? 'false' : 'true'}">${company.active ? 'Désactiver' : 'Réactiver'}</button>${company.active ? `<button class="button small" data-reissue-admin="${escapeHtml(company.admin_user_id)}">${company.activated ? 'Récupérer l’accès' : 'Récupérer le lien'}</button>` : ''}</div></div></article>`).join('');
   const emptyCompanies = ownerCompaniesError
     ? `<div class="empty">${escapeHtml(ownerCompaniesError)}</div>`
     : '<div class="empty">Aucune société créée pour le moment.</div>';
@@ -207,6 +207,7 @@ function render() {
   $('#addCourier')?.addEventListener('click', () => { accountModal = 'courier'; render(); });
   $('#createCompanyAdmin')?.addEventListener('click', () => { accountModal = 'admin'; render(); });
   $('#app').querySelectorAll('[data-reissue-admin]').forEach((button) => button.onclick = () => reissueAdminLink(button.dataset.reissueAdmin));
+  $('#app').querySelectorAll('[data-company-active]').forEach((button) => button.onclick = () => setCompanyActive(button.dataset.companyActive, button.dataset.nextActive === 'true', button.dataset.companyName));
   $('#exportOrders')?.addEventListener('click', exportOrders);
   $('#app').querySelectorAll('[data-assign]').forEach((select) => select.onchange = () => assignDelivery(select.dataset.assign, select.value || null));
   $('#app').querySelectorAll('[data-accept]').forEach((button) => button.onclick = () => acceptDelivery(button.dataset.accept));
@@ -240,9 +241,9 @@ async function loadProfile() {
     profile = { full_name: user.user_metadata?.full_name || user.email };
     return;
   }
-  const { data: member, error } = await supabase.from('company_members').select('user_id,company_id,role,full_name,phone,active,companies(name)').eq('user_id', user.id).maybeSingle();
+  const { data: member, error } = await supabase.from('company_members').select('user_id,company_id,role,full_name,phone,active,companies(name,active)').eq('user_id', user.id).maybeSingle();
   if (error) throw error;
-  if (!member || !member.active) throw new Error('Ce compte ne possède pas de rôle actif. Contacte le propriétaire du site.');
+  if (!member || !member.active || !member.companies?.active) throw new Error('L’accès à cette société est désactivé. Contacte le propriétaire du site.');
   role = member.role;
   profile = { ...member, company_name: member.companies?.name || '' };
 }
@@ -285,6 +286,19 @@ async function reissueAdminLink(userId) {
   rememberInvite({ email: data.email, url: data.activationUrl, kind: 'recovery' });
   render();
   toast('Lien de récupération prêt. Partage-le en privé avec l’administrateur.');
+}
+
+async function setCompanyActive(companyId, active, companyName) {
+  const verb = active ? 'réactiver' : 'désactiver';
+  if (!window.confirm(`Veux-tu ${verb} la société « ${companyName} » ? ${active ? 'Les comptes pourront se reconnecter.' : 'L’administrateur et les livreurs ne pourront plus se connecter. Les livraisons et l’historique seront conservés.'}`)) return;
+  const { data, error } = await supabase.functions.invoke('manage-accounts', {
+    body: { action: 'set_company_active', companyId, active },
+  });
+  if (error) return showError(error, 'Le statut de la société n’a pas pu être modifié.');
+  if (data?.error) return toast(data.error);
+  await loadOwnerCompanies();
+  render();
+  toast(active ? 'Société réactivée.' : 'Société désactivée. Son historique est conservé.');
 }
 
 async function signIn(event) {
