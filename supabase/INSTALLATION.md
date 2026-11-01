@@ -1,21 +1,25 @@
 # Configuration Supabase de Colis
 
-Le projet Supabase `colis-livraison` est déjà configuré : schéma multi-sociétés appliqué, propriétaire actif, adresse `SITE_URL` définie pour la fonction et URL de retour du site autorisée.
+Le projet `colis-livraison` est créé. Le schéma multi-sociétés, les protections RLS, le compte propriétaire `Colislivraison@colis.com` et la fonction serveur `manage-accounts` ont été préparés dans Supabase.
 
-## Invitations sans SMTP
+## Activation du compte propriétaire
 
-La version mise à jour de `manage-accounts` génère un lien d’activation au lieu d’envoyer un e-mail. Après création d’une société ou invitation d’un livreur, copie le lien affiché par le site et partage-le directement avec la personne concernée.
+1. Ouvre l’invitation reçue à `Colislivraison@colis.com` et définis ton mot de passe depuis le lien.
+2. Depuis le site, le propriétaire peut créer le premier compte administrateur de chaque société.
+3. L’administrateur de chaque société peut ensuite inviter ses livreurs.
 
-Le lien permet à son destinataire d’ouvrir le site et de choisir un mot de passe. Traite-le comme un code d’accès : partage-le en privé, uniquement avec la personne invitée. Ne l’envoie pas dans une conversation publique ou une capture d’écran.
+Les invitations et liens de récupération doivent revenir sur l’adresse Vercel du site. Dans **Authentication → URL Configuration**, règle le **Site URL** et ajoute l’adresse publique du site à la liste des redirections autorisées.
 
-Cette méthode ne demande pas de configurer SMTP. Les liens doivent être utilisés rapidement selon leur durée de validité Supabase. Si l’adresse e-mail existe déjà, vérifie le compte dans **Authentication → Users** avant toute suppression ou nouvelle tentative.
+## Connexion du site
 
-## Mise à jour de la fonction
+Dans **Project Settings → API Keys**, copie uniquement la clé **publishable** et renseigne-la dans `supabase-config.js`. Cette clé est prévue pour le navigateur. N’utilise jamais une clé **secret** ou `service_role` dans le site, dans GitHub ou dans Vercel.
 
-Après avoir mis à jour `app.js` sur GitHub, remplace le code de **Edge Functions → manage-accounts** par `functions/manage-accounts/index.ts` et clique sur **Deploy updates**. Le guide complet se trouve dans `GUIDE-PUBLICATION.md`.
+La fonction `manage-accounts` vérifie les rôles côté serveur avant de créer des invitations. Les requêtes de livraisons restent isolées par société grâce aux règles RLS du schéma.
 
-## Clés et sécurité
+## Schéma du compte et des données
 
-Le site utilise uniquement la clé **publishable** dans `supabase-config.js`. Ne place jamais la clé **secret** ou `service_role` dans le navigateur, GitHub ou Vercel.
+Le fichier `schema.sql` décrit les tables `companies`, `platform_owners`, `company_members` et `deliveries`, les règles RLS et les fonctions RPC de changement d’état des livraisons. Il a déjà été appliqué au projet Colis. Ne le rejoue pas si les tables et fonctions sont déjà présentes.
 
-La fonction vérifie le rôle du propriétaire ou de l’administrateur côté serveur. Les règles RLS isolent les sociétés et leurs données.
+## Désactivation d’une société
+
+Pour ajouter l’option **Désactiver / Réactiver** sur un projet déjà configuré, exécute une fois `upgrade_company_status.sql` dans le SQL Editor du projet. Cette mise à jour ajoute un état à la société et fait respecter cet état par les règles RLS. Les comptes et livraisons restent conservés.
