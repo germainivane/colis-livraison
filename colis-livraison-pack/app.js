@@ -24,7 +24,7 @@ let generatedInvite = (() => {
     return saved && saved.creatorId && Date.now() - saved.createdAt < 24 * 60 * 60 * 1000 ? saved : null;
   } catch { return null; }
 })();
-let needsPasswordSetup = window.location.hash.includes('type=invite') || window.location.hash.includes('type=recovery');
+let needsPasswordSetup = window.location.hash.includes('type=invite') || window.location.hash.includes('type=recovery') || window.location.hash.includes('type=magiclink');
 
 const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const initials = (name = '') => name === 'À attribuer' ? '?' : name.split(/[ .]+/).filter(Boolean).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
@@ -106,7 +106,7 @@ function activityPanel() {
 
 function adminView() {
   const stats = metrics();
-  if (adminPage === 'team') return `${heading('Votre société', 'Livreurs', 'Invitez les livreurs de votre équipe.', '<button class="button" id="addCourier">＋　Inviter un livreur</button>')}<section class="team-grid">${couriers.map((courier) => `<article class="team-card"><div class="team-card-head"><div class="avatar large">${initials(courier.full_name)}</div><span class="status ${courier.active ? '' : 'done'}">${courier.active ? 'Actif' : 'Désactivé'}</span></div><h2>${escapeHtml(courier.full_name)}</h2><div class="route">${escapeHtml(courier.phone || 'Téléphone non renseigné')}</div><div class="team-card-foot"><span>${deliveries.filter((item) => item.courier_id === courier.user_id && item.status === 'Livrée').length} livraisons terminées</span></div></article>`).join('') || '<div class="empty">Aucun livreur dans cette équipe.</div>'}</section>`;
+  if (adminPage === 'team') return `${heading('Votre société', 'Livreurs', 'Invitez les livreurs de votre équipe.', '<button class="button" id="addCourier">＋　Inviter un livreur</button>')}<section class="team-grid">${couriers.map((courier) => `<article class="team-card"><div class="team-card-head"><div class="avatar large">${initials(courier.full_name)}</div><span class="status ${courier.active ? '' : 'done'}">${courier.active ? 'Actif' : 'Désactivé'}</span></div><h2>${escapeHtml(courier.full_name)}</h2><div class="route">${escapeHtml(courier.phone || 'Téléphone non renseigné')}</div><div class="team-card-foot"><span>${deliveries.filter((item) => item.courier_id === courier.user_id && item.status === 'Livrée').length} livraisons terminées</span><div class="team-card-actions"><button class="button small secondary" data-reissue-courier="${escapeHtml(courier.user_id)}" ${courier.active ? '' : 'disabled'}>Récupérer le lien</button></div></div></article>`).join('') || '<div class="empty">Aucun livreur dans cette équipe.</div>'}</section>`;
   if (adminPage === 'deliveries') return `${heading('Opérations', 'Toutes les livraisons', 'Recherchez, filtrez et attribuez les commandes de votre société.', '<button class="button" id="openDelivery">＋　Nouvelle livraison</button>')}${tablePanel(filteredDeliveries(), { assign: true })}`;
   return `${heading('Espace administration', `Bonjour, ${escapeHtml(profile?.full_name?.split(' ')[0] || 'Administrateur')} <span style="font-size:23px">☀</span>`, 'Voici l’activité de votre société.', '<button class="button" id="openDelivery">＋　Nouvelle livraison</button>')}<section class="metrics">${metricCard('Livraisons', stats.total, 'Commandes enregistrées', '▣')}${metricCard('À prendre en charge', stats.pending, 'En attente de collecte', '◷')}${metricCard('En cours', stats.progress, 'Colis sur la route', '➜')}${metricCard('Livrées', stats.done, 'Remises confirmées', '✓')}</section><div class="columns">${tablePanel(filteredDeliveries(deliveries.slice(0, 5)), { controls: false })}${activityPanel()}</div>`;
 }
@@ -207,6 +207,7 @@ function render() {
   $('#addCourier')?.addEventListener('click', () => { accountModal = 'courier'; render(); });
   $('#createCompanyAdmin')?.addEventListener('click', () => { accountModal = 'admin'; render(); });
   $('#app').querySelectorAll('[data-reissue-admin]').forEach((button) => button.onclick = () => reissueAdminLink(button.dataset.reissueAdmin));
+  $('#app').querySelectorAll('[data-reissue-courier]').forEach((button) => button.onclick = () => reissueCourierLink(button.dataset.reissueCourier));
   $('#app').querySelectorAll('[data-company-active]').forEach((button) => button.onclick = () => setCompanyActive(button.dataset.companyActive, button.dataset.nextActive === 'true', button.dataset.companyName));
   $('#exportOrders')?.addEventListener('click', exportOrders);
   $('#app').querySelectorAll('[data-assign]').forEach((select) => select.onchange = () => assignDelivery(select.dataset.assign, select.value || null));
@@ -286,6 +287,15 @@ async function reissueAdminLink(userId) {
   rememberInvite({ email: data.email, url: data.activationUrl, kind: 'recovery' });
   render();
   toast('Lien de récupération prêt. Partage-le en privé avec l’administrateur.');
+}
+
+async function reissueCourierLink(userId) {
+  const { data, error } = await supabase.functions.invoke('manage-accounts', { body: { action: 'reissue_courier_link', userId } });
+  if (error) return showError(error, 'Le lien du livreur n’a pas pu être créé.');
+  if (data?.error) return toast(data.error);
+  rememberInvite({ email: data.email, url: data.activationUrl, kind: data.kind || 'activation' });
+  render();
+  toast('Lien du livreur prêt. Partage-le en privé.');
 }
 
 async function setCompanyActive(companyId, active, companyName) {
