@@ -6,8 +6,12 @@ create extension if not exists pgcrypto;
 create table if not exists public.companies (
   id uuid primary key default gen_random_uuid(),
   name text not null check (char_length(trim(name)) between 2 and 120),
+  active boolean not null default true,
   created_at timestamptz not null default now()
 );
+
+alter table public.companies
+  add column if not exists active boolean not null default true;
 
 -- Platform owners are maintenance accounts managed only from the SQL Editor
 -- during bootstrap and from the privileged Edge Function afterward.
@@ -58,6 +62,7 @@ set search_path = ''
 as $$
   select m.company_id
   from public.company_members as m
+  join public.companies as c on c.id = m.company_id and c.active
   where m.user_id = (select auth.uid()) and m.active
   limit 1
 $$;
@@ -69,6 +74,7 @@ set search_path = ''
 as $$
   select m.role
   from public.company_members as m
+  join public.companies as c on c.id = m.company_id and c.active
   where m.user_id = (select auth.uid()) and m.active
   limit 1
 $$;

@@ -19,3 +19,7 @@ La fonction `manage-accounts` vérifie les rôles côté serveur avant de créer
 ## Schéma du compte et des données
 
 Le fichier `schema.sql` décrit les tables `companies`, `platform_owners`, `company_members` et `deliveries`, les règles RLS et les fonctions RPC de changement d’état des livraisons. Il a déjà été appliqué au projet Colis. Ne le rejoue pas si les tables et fonctions sont déjà présentes.
+
+## Désactivation d’une société
+
+Pour ajouter l’option **Désactiver / Réactiver** sur un projet déjà configuré, exécute une fois `upgrade_company_status.sql` dans le SQL Editor du projet. Cette mise à jour ajoute un état à la société et fait respecter cet état par les règles RLS. Les comptes et livraisons restent conservés.
