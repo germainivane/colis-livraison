@@ -1,0 +1,2 @@
+[functions.manage-accounts]
+verify_jwt = true
