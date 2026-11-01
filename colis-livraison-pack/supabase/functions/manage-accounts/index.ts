@@ -63,7 +63,7 @@ Deno.serve(async (request) => {
     if (!(await requireOwner())) return json({ error: "Seul le compte propriétaire peut consulter les sociétés." }, 403);
     const { data: companies, error: companiesError } = await admin
       .from("companies")
-      .select("id,name,created_at")
+      .select("id,name,created_at,active")
       .order("created_at", { ascending: false });
     if (companiesError) return json({ error: "La liste des sociétés n’a pas pu être chargée." }, 500);
 
@@ -82,14 +82,30 @@ Deno.serve(async (request) => {
         company_id: company.id,
         company_name: company.name,
         created_at: company.created_at,
+        active: company.active,
         admin_user_id: member.user_id,
         admin_name: member.full_name,
         admin_email: authUser?.email ?? "Adresse indisponible",
         activated: Boolean(authUser?.email_confirmed_at),
-        active: member.active,
       };
     }));
     return json({ companies: rows.filter(Boolean) });
+  }
+
+  if (action === "set_company_active") {
+    if (!(await requireOwner())) return json({ error: "Seul le compte propriétaire peut modifier une société." }, 403);
+    const companyId = text(input.companyId, 80);
+    const active = input.active;
+    if (!companyId || typeof active !== "boolean") return json({ error: "Société ou statut invalide." }, 400);
+    const { data: company, error: companyError } = await admin
+      .from("companies")
+      .update({ active })
+      .eq("id", companyId)
+      .select("id,active")
+      .maybeSingle();
+    if (companyError) return json({ error: "Le statut de la société n’a pas pu être modifié." }, 500);
+    if (!company) return json({ error: "Société introuvable." }, 404);
+    return json({ ok: true, companyId: company.id, active: company.active });
   }
 
   if (action === "reissue_admin_link") {
@@ -146,6 +162,12 @@ Deno.serve(async (request) => {
     if (memberError || !member || member.role !== "admin" || !member.active) {
       return json({ error: "Seul un administrateur actif peut inviter un livreur." }, 403);
     }
+    const { data: company, error: companyError } = await admin
+      .from("companies")
+      .select("active")
+      .eq("id", member.company_id)
+      .maybeSingle();
+    if (companyError || !company?.active) return json({ error: "Cette société est désactivée." }, 403);
     companyId = member.company_id;
     inviteRole = "courier";
   } else {
