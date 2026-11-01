@@ -112,7 +112,7 @@ function adminView() {
 }
 
 function ownerView() {
-  const companyRows = ownerCompanies.map((company) => `<article class="team-card"><div class="team-card-head"><div class="avatar large">${initials(company.company_name)}</div><span class="status ${company.activated ? '' : 'waiting'}">${company.activated ? 'Compte activé' : 'Activation en attente'}</span></div><h2>${escapeHtml(company.company_name)}</h2><div class="route">Administrateur : ${escapeHtml(company.admin_name)} · ${escapeHtml(company.admin_email)}</div>${!company.activated ? `<div class="team-card-foot"><span>Un lien sécurisé permet de terminer l’activation.</span><button class="button small" data-reissue-admin="${escapeHtml(company.admin_user_id)}">Récupérer le lien</button></div>` : ''}</article>`).join('');
+  const companyRows = ownerCompanies.map((company) => `<article class="team-card"><div class="team-card-head"><div class="avatar large">${initials(company.company_name)}</div><span class="status ${company.activated ? '' : 'waiting'}">${company.activated ? 'Compte activé' : 'Activation en attente'}</span></div><h2>${escapeHtml(company.company_name)}</h2><div class="route">Administrateur : ${escapeHtml(company.admin_name)} · ${escapeHtml(company.admin_email)}</div><div class="team-card-foot"><span>${company.activated ? 'L’administrateur a activé son compte.' : 'L’administrateur doit terminer l’activation.'}</span><button class="button small" data-reissue-admin="${escapeHtml(company.admin_user_id)}">${company.activated ? 'Récupérer l’accès' : 'Récupérer le lien'}</button></div></article>`).join('');
   const emptyCompanies = ownerCompaniesError
     ? `<div class="empty">${escapeHtml(ownerCompaniesError)}</div>`
     : '<div class="empty">Aucune société créée pour le moment.</div>';
@@ -155,7 +155,8 @@ function accountDialog() {
 
 function inviteLinkDialog() {
   if (!generatedInvite) return '';
-  return `<div class="modal-backdrop open" id="inviteLinkBackdrop"><section class="modal"><div class="modal-head"><h2>Lien d’activation prêt</h2><button class="close" type="button" id="closeInviteLink" aria-label="Fermer">×</button></div><p class="subtitle">Envoie ce lien directement à <b>${escapeHtml(generatedInvite.email)}</b> par message privé pour que la personne choisisse son mot de passe.</p><div class="field"><label>Lien à partager</label><input id="inviteLinkValue" type="text" readonly value="${escapeHtml(generatedInvite.url)}"></div><p class="route">Ce lien donne accès au compte : partage-le uniquement avec la personne invitée et ne le publie pas.</p><div class="modal-footer"><button class="button secondary" type="button" id="closeInviteLinkSecondary">Fermer</button><button class="button" type="button" id="copyInviteLink">Copier le lien</button></div></section></div>`;
+  const recovery = generatedInvite.kind === 'recovery';
+  return `<div class="modal-backdrop open" id="inviteLinkBackdrop"><section class="modal"><div class="modal-head"><h2>${recovery ? 'Lien de récupération prêt' : 'Lien d’activation prêt'}</h2><button class="close" type="button" id="closeInviteLink" aria-label="Fermer">×</button></div><p class="subtitle">Envoie ce lien directement à <b>${escapeHtml(generatedInvite.email)}</b> par message privé pour que la personne ${recovery ? 'choisisse un nouveau mot de passe' : 'choisisse son mot de passe'}.</p><div class="field"><label>Lien à partager</label><input id="inviteLinkValue" type="text" readonly value="${escapeHtml(generatedInvite.url)}"></div><p class="route">Ce lien donne accès au compte : partage-le uniquement avec la personne concernée et ne le publie pas.</p><div class="modal-footer"><button class="button secondary" type="button" id="closeInviteLinkSecondary">Fermer</button><button class="button" type="button" id="copyInviteLink">Copier le lien</button></div></section></div>`;
 }
 
 function loginView() {
@@ -281,9 +282,9 @@ async function reissueAdminLink(userId) {
   const { data, error } = await supabase.functions.invoke('manage-accounts', { body: { action: 'reissue_admin_link', userId } });
   if (error) return showError(error, 'Le lien d’activation n’a pas pu être créé.');
   if (data?.error) return toast(data.error);
-  rememberInvite({ email: data.email, url: data.activationUrl });
+  rememberInvite({ email: data.email, url: data.activationUrl, kind: 'recovery' });
   render();
-  toast('Nouveau lien d’activation prêt. Partage-le en privé avec l’administrateur.');
+  toast('Lien de récupération prêt. Partage-le en privé avec l’administrateur.');
 }
 
 async function signIn(event) {
