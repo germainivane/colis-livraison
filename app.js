@@ -16,7 +16,14 @@ let courierPage = 'missions';
 let filter = 'Tous';
 let searchTerm = '';
 let accountModal = null;
-let generatedInvite = null;
+let ownerCompanies = [];
+let ownerCompaniesError = '';
+let generatedInvite = (() => {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem('colisPendingInvite') || 'null');
+    return saved && saved.creatorId && Date.now() - saved.createdAt < 24 * 60 * 60 * 1000 ? saved : null;
+  } catch { return null; }
+})();
 let needsPasswordSetup = window.location.hash.includes('type=invite') || window.location.hash.includes('type=recovery');
 
 const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
@@ -105,7 +112,21 @@ function adminView() {
 }
 
 function ownerView() {
-  return `${heading('Maintenance plateforme', 'Gestion des sociétés', 'Créez un espace administrateur pour une nouvelle société.', '<button class="button" id="createCompanyAdmin">＋　Créer une société</button>')}<section class="panel"><div class="panel-head"><div><h2>Accès propriétaire</h2><div class="route" style="margin-top:5px">Seul ce compte peut inviter les administrateurs de société.</div></div></div><div class="activity"><div class="activity-item"><div class="avatar">${initials(profile?.full_name || user?.email || 'P')}</div><div class="activity-text"><b>${escapeHtml(profile?.full_name || 'Compte propriétaire')}</b><br>${escapeHtml(user?.email || '')}<div class="activity-time">Propriétaire plateforme</div></div></div></div></section>`;
+  const companyRows = ownerCompanies.map((company) => `<article class="team-card"><div class="team-card-head"><div class="avatar large">${initials(company.company_name)}</div><span class="status ${company.activated ? '' : 'waiting'}">${company.activated ? 'Compte activé' : 'Activation en attente'}</span></div><h2>${escapeHtml(company.company_name)}</h2><div class="route">Administrateur : ${escapeHtml(company.admin_name)} · ${escapeHtml(company.admin_email)}</div>${!company.activated ? `<div class="team-card-foot"><span>Un lien sécurisé permet de terminer l’activation.</span><button class="button small" data-reissue-admin="${escapeHtml(company.admin_user_id)}">Récupérer le lien</button></div>` : ''}</article>`).join('');
+  const emptyCompanies = ownerCompaniesError
+    ? `<div class="empty">${escapeHtml(ownerCompaniesError)}</div>`
+    : '<div class="empty">Aucune société créée pour le moment.</div>';
+  return `${heading('Maintenance plateforme', 'Gestion des sociétés', 'Créez et suivez les espaces administrateur des sociétés.', '<button class="button" id="createCompanyAdmin">＋　Créer une société</button>')}<section class="panel"><div class="panel-head"><div><h2>Accès propriétaire</h2><div class="route" style="margin-top:5px">Seul ce compte peut gérer les administrateurs de société.</div></div></div><div class="activity"><div class="activity-item"><div class="avatar">${initials(profile?.full_name || user?.email || 'P')}</div><div class="activity-text"><b>${escapeHtml(profile?.full_name || 'Compte propriétaire')}</b><br>${escapeHtml(user?.email || '')}<div class="activity-time">Propriétaire plateforme</div></div></div></div></section><section class="panel" style="margin-top:16px"><div class="panel-head"><div><h2>Sociétés enregistrées</h2><div class="route" style="margin-top:5px">${ownerCompanies.length} société(s)</div></div></div><div class="team-grid">${companyRows || emptyCompanies}</div></section>`;
+}
+
+function rememberInvite(invite) {
+  generatedInvite = { ...invite, creatorId: user?.id, createdAt: Date.now() };
+  try { sessionStorage.setItem('colisPendingInvite', JSON.stringify(generatedInvite)); } catch { /* The link still remains available in this page session. */ }
+}
+
+function clearRememberedInvite() {
+  generatedInvite = null;
+  try { sessionStorage.removeItem('colisPendingInvite'); } catch { /* Ignore storage restrictions. */ }
 }
 
 function courierCard(item, isAvailable) {
@@ -170,7 +191,7 @@ function render() {
   $('#sideNav').innerHTML = navItems().map(([key, icon, label]) => `<button class="${(role === 'owner' || role === 'admin' && adminPage === key || role === 'courier' && courierPage === key) ? 'active' : ''}" data-page="${key}"><span class="icon">${icon}</span>${label}</button>`).join('');
   $('#app').innerHTML = role === 'owner' ? ownerView() : role === 'admin' ? adminView() : courierView();
   if (accountModal) document.body.insertAdjacentHTML('beforeend', accountDialog());
-  if (generatedInvite) document.body.insertAdjacentHTML('beforeend', inviteLinkDialog());
+  if (view === 'dashboard' && generatedInvite?.creatorId === user?.id) document.body.insertAdjacentHTML('beforeend', inviteLinkDialog());
 
   $('#logoutButton').onclick = async () => {
     const { error } = await supabase.auth.signOut({ scope: 'local' });
@@ -184,6 +205,7 @@ function render() {
   $('#openDelivery')?.addEventListener('click', openDeliveryDialog);
   $('#addCourier')?.addEventListener('click', () => { accountModal = 'courier'; render(); });
   $('#createCompanyAdmin')?.addEventListener('click', () => { accountModal = 'admin'; render(); });
+  $('#app').querySelectorAll('[data-reissue-admin]').forEach((button) => button.onclick = () => reissueAdminLink(button.dataset.reissueAdmin));
   $('#exportOrders')?.addEventListener('click', exportOrders);
   $('#app').querySelectorAll('[data-assign]').forEach((select) => select.onchange = () => assignDelivery(select.dataset.assign, select.value || null));
   $('#app').querySelectorAll('[data-accept]').forEach((button) => button.onclick = () => acceptDelivery(button.dataset.accept));
@@ -204,7 +226,7 @@ function render() {
       toast('Sélectionne le lien puis copie-le manuellement.');
     }
   });
-  const closeInviteLink = () => { generatedInvite = null; render(); };
+  const closeInviteLink = () => { clearRememberedInvite(); render(); };
   $('#closeInviteLink')?.addEventListener('click', closeInviteLink);
   $('#closeInviteLinkSecondary')?.addEventListener('click', closeInviteLink);
 }
@@ -228,6 +250,7 @@ async function loadWorkspace() {
   if (role === 'owner') {
     deliveries = [];
     couriers = [];
+    await loadOwnerCompanies();
     return;
   }
   const { data: deliveryRows, error: deliveryError } = await supabase.from('deliveries').select('id,company_id,courier_id,reference,recipient_name,recipient_phone,pickup_address,dropoff_address,parcel_type,status,created_at,delivered_at,courier:company_members!deliveries_courier_id_fkey(full_name,phone)').order('created_at', { ascending: false });
@@ -240,6 +263,27 @@ async function loadWorkspace() {
   } else {
     couriers = [];
   }
+}
+
+async function loadOwnerCompanies() {
+  ownerCompaniesError = '';
+  const { data, error } = await supabase.functions.invoke('manage-accounts', { body: { action: 'list_companies' } });
+  if (error || data?.error) {
+    ownerCompanies = [];
+    ownerCompaniesError = 'La liste des sociétés n’a pas pu être chargée. Actualise la page ou vérifie le déploiement de la fonction Supabase.';
+    console.error(error || data?.error);
+    return;
+  }
+  ownerCompanies = Array.isArray(data?.companies) ? data.companies : [];
+}
+
+async function reissueAdminLink(userId) {
+  const { data, error } = await supabase.functions.invoke('manage-accounts', { body: { action: 'reissue_admin_link', userId } });
+  if (error) return showError(error, 'Le lien d’activation n’a pas pu être créé.');
+  if (data?.error) return toast(data.error);
+  rememberInvite({ email: data.email, url: data.activationUrl });
+  render();
+  toast('Nouveau lien d’activation prêt. Partage-le en privé avec l’administrateur.');
 }
 
 async function signIn(event) {
@@ -301,10 +345,10 @@ async function submitAccountInvite(event) {
   if (error) return showError(error, 'L’invitation n’a pas pu être envoyée.');
   if (data?.error) return toast(data.error);
   accountModal = null;
-  generatedInvite = data?.invitationUrl ? { email: body.email, url: data.invitationUrl } : null;
+  if (data?.invitationUrl) rememberInvite({ email: body.email, url: data.invitationUrl });
   render();
   toast(data?.message || 'Lien d’activation créé.');
-  await loadWorkspace();
+  if (role === 'owner') await loadOwnerCompanies();
   render();
 }
 
@@ -377,6 +421,7 @@ function exportOrders() {
 
 async function handleSession(session, eventName = '') {
   if (!session?.user) { user = null; profile = null; role = 'admin'; view = 'login'; render(); return; }
+  if (generatedInvite && generatedInvite.creatorId !== session.user.id) clearRememberedInvite();
   if (eventName === 'PASSWORD_RECOVERY') needsPasswordSetup = true;
   user = session.user;
   try {
